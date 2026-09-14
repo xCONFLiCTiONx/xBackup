@@ -666,33 +666,53 @@ namespace BackupTool
                 Directory.CreateDirectory(dir);
             }
 
-            // Create and format VHDX as a Dev Drive / ReFS volume using precise sequence
-            // We include the 'devdrv' flag to ensure compatibility on systems where standard ReFS is restricted
-            string diskpartScript = $@"create vdisk file=""{vhdxPath}"" maximum=102400 type=expandable
+            // Create and partition VHDX using DiskPart.
+            // We separate 'format' from DiskPart to handle the /devdrv flag compatibility and provide fallbacks.
+            string diskpartSetup = $@"create vdisk file=""{vhdxPath}"" maximum=102400 type=expandable
 select vdisk file=""{vhdxPath}""
 attach vdisk
 create partition primary
-format fs=refs devdrv label=""BackupReFS"" quick
 assign letter=Z
 exit";
 
-            RunDiskpartScript(diskpartScript);
-
-            // Set Dev Drive trust flag to complete initialization parameters correctly
             try
             {
-                RunSystemCommand("fsutil.exe", "devdrv trust /vol:Z:");
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"Dev Drive trust warning: {ex.Message}", Brushes.Orange);
-            }
+                RunDiskpartScript(diskpartSetup);
 
-            // Cleanly detach disk so it stays closed lifecycle ready
-            string detachScript = $@"select vdisk file=""{vhdxPath}""
+                // Attempt to format as Dev Drive (ReFS) first.
+                // DiskPart's internal 'format' command often lacks support for the 'devdrv' flag or fails on Home editions.
+                try
+                {
+                    RunPowerShell("Format-Volume -DriveLetter Z -FileSystem ReFS -DevDrive -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
+                    // Apply Dev Drive trust policy for performance optimization
+                    try { RunSystemCommand("fsutil.exe", "devdrv trust /vol:Z:"); } catch { }
+                }
+                catch
+                {
+                    // Fallback 1: Standard ReFS (Non-Dev Drive) - Works on Pro/Enterprise editions
+                    try
+                    {
+                        RunPowerShell("Format-Volume -DriveLetter Z -FileSystem ReFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
+                    }
+                    catch
+                    {
+                        // Fallback 2: Standard NTFS - Works on all Windows versions including Home
+                        RunPowerShell("Format-Volume -DriveLetter Z -FileSystem NTFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
+                    }
+                }
+            }
+            finally
+            {
+                // Cleanly detach disk so it stays closed lifecycle ready
+                string detachScript = $@"select vdisk file=""{vhdxPath}""
 detach vdisk
 exit";
-            RunDiskpartScript(detachScript);
+                try
+                {
+                    RunDiskpartScript(detachScript);
+                }
+                catch { /* Ignore errors during detach in setup phase */ }
+            }
         }
 
         private static void RunDiskpartScript(string scriptContent)
@@ -752,18 +772,33 @@ exit";
 
         private static string MountVhdxAndGetLetter(string vhdxPath)
         {
-            RunPowerShell($"Mount-DiskImage -ImagePath \"{vhdxPath}\"");
+            // We run the retry logic inside PowerShell to avoid the overhead of starting multiple processes,
+            // and use a more robust discovery path through Get-Disk and Get-Partition.
+            // We MUST discard the output of Mount-DiskImage ($null = ...) otherwise it pollutes the return string.
+            string script = $@"
+$path = '{vhdxPath.Replace("'", "''")}';
+$null = Mount-DiskImage -ImagePath $path -StorageType VHDX -ErrorAction SilentlyContinue;
+for ($i = 0; $i -lt 20; $i++) {{
+    $di = Get-DiskImage -ImagePath $path;
+    if ($di.Number -ne $null) {{
+        $letter = (Get-Disk -Number $di.Number | Get-Partition | Where-Object DriveLetter).DriveLetter;
+        if ($letter) {{
+            Write-Output $letter;
+            return;
+        }}
+    }}
+    Start-Sleep -Milliseconds 500;
+}}";
 
-            for (int i = 0; i < 20; i++)
+            string output = RunPowerShell(script).Trim();
+
+            if (!string.IsNullOrEmpty(output) && char.IsLetter(output[0]))
             {
-                string letter = RunPowerShell($"(Get-DiskImage -ImagePath \"{vhdxPath}\" | Get-Volume).DriveLetter").Trim();
-                if (!string.IsNullOrEmpty(letter) && letter.Length == 1 && char.IsLetter(letter[0]))
-                {
-                    return letter + ":";
-                }
-                System.Threading.Thread.Sleep(500);
+                // Ensure we only take the letter, even if there's trailing whitespace or objects
+                return output[0] + ":";
             }
-            throw new Exception("VHDX container mounted successfully, but target letter discovery timed out.");
+
+            throw new Exception("VHDX container mounted successfully, but target letter discovery timed out. Please ensure the volume is initialized.");
         }
 
         private static void DismountVhdx(string vhdxPath)
