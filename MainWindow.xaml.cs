@@ -22,12 +22,13 @@ namespace BackupTool
         private const uint ES_SYSTEM_REQUIRED = 0x00000001;
         private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
 
-        private readonly string[] _sourcePaths = new[] { @"C:\Users\Michael", @"C:\ProgramData" };
+        private readonly string[] _sourcePaths = new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"C:\ProgramData" };
         private bool _isProcessing = false;
         private bool _isVhdxMountedManual = false;
         private readonly bool _isSilentMode = false;
         private H.NotifyIcon.TaskbarIcon? _notifyIcon;
         private readonly List<string> _errorDetailsReport = new List<string>();
+        private System.Threading.CancellationTokenSource? _cts;
 
         public class RelayCommand : System.Windows.Input.ICommand
         {
@@ -296,9 +297,21 @@ namespace BackupTool
 
             _notifyIcon?.ShowNotification("Midnight Backup Started", "The personal incremental backup session has successfully initialized in the system tray.");
 
-            await Task.Run(() => RunBackupEngine(destinationRoot));
-
-            SetUiState(processing: false);
+            _cts = new System.Threading.CancellationTokenSource();
+            try
+            {
+                await Task.Run(() => RunBackupEngine(destinationRoot, _cts.Token));
+            }
+            catch (OperationCanceledException)
+            {
+                AppendLog("Scheduled backup cancelled by user.", Brushes.Orange);
+            }
+            finally
+            {
+                _cts.Dispose();
+                _cts = null;
+                SetUiState(processing: false);
+            }
 
             if (Visibility != Visibility.Visible)
             {
@@ -336,9 +349,32 @@ namespace BackupTool
             RtbLog.Document.Blocks.Clear();
             PrgBar.Value = 0;
 
-            await Task.Run(() => RunBackupEngine(destinationRoot));
+            _cts = new System.Threading.CancellationTokenSource();
 
-            SetUiState(processing: false);
+            try
+            {
+                await Task.Run(() => RunBackupEngine(destinationRoot, _cts.Token));
+            }
+            catch (OperationCanceledException)
+            {
+                AppendLog("Backup operation was cancelled by the user.", Brushes.Orange);
+            }
+            finally
+            {
+                _cts.Dispose();
+                _cts = null;
+                SetUiState(processing: false);
+            }
+        }
+
+        private void BtnStop_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isProcessing && _cts != null)
+            {
+                AppendLog("Issue Stop Signal... Waiting for engine to cycle down.", Brushes.Yellow);
+                _cts.Cancel();
+                BtnStop.IsEnabled = false;
+            }
         }
 
         private async void BtnToggleMount_Click(object sender, RoutedEventArgs e)
@@ -426,12 +462,13 @@ namespace BackupTool
             _isProcessing = processing;
             BtnBackup.IsEnabled = !processing && !_isVhdxMountedManual;
             BtnToggleMount.IsEnabled = !processing;
+            BtnStop.IsEnabled = processing;
             TxtDestination.IsEnabled = !processing && !_isVhdxMountedManual;
             TxtStatus.Text = processing ? "Engine Status: Active" : "Engine Status: Ready";
             TxtStatus.Foreground = processing ? new SolidColorBrush(Color.FromRgb(220, 202, 170)) : new SolidColorBrush(Color.FromRgb(78, 201, 176));
         }
 
-        private void RunBackupEngine(string destRoot)
+        private void RunBackupEngine(string destRoot, System.Threading.CancellationToken cancellationToken)
         {
             string vhdxPath = Path.Combine(destRoot, "BackupDev.vhdx");
             string mountedDrive = string.Empty;
@@ -474,7 +511,7 @@ namespace BackupTool
                     }
 
                     AppendLog($"Scanning scope: {sourceRoot}...", Brushes.Gray);
-                    DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount);
+                    DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount, cancellationToken);
                 }
 
                 AppendLog($"Discovery finished. Total files matched on drive: {filesToProcess.Count} (Filtered out {totalScannedCount - filesToProcess.Count} junk/temp files).", Brushes.LightGreen);
@@ -494,6 +531,7 @@ namespace BackupTool
 
                 foreach (var file in filesToProcess)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     currentIndex++;
                     if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
                     {
@@ -634,6 +672,10 @@ namespace BackupTool
                     LblLocked.Text = lockedCount.ToString("N0");
                     LblSavings.Text = FormatBytes(totalBytesMirrored);
                 });
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -833,8 +875,9 @@ for ($i = 0; $i -lt 20; $i++) {{
             }
         }
 
-        private void DiscoverFilesRecursively(string currentDir, List<string> files, ref long scannedCount)
+        private void DiscoverFilesRecursively(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (IsPathExcluded(currentDir)) return;
 
             try
@@ -842,6 +885,7 @@ for ($i = 0; $i -lt 20; $i++) {{
                 string[] dirFiles = Directory.GetFiles(currentDir);
                 foreach (var f in dirFiles)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     scannedCount++;
                     if (!IsPathExcluded(f))
                     {
@@ -861,7 +905,7 @@ for ($i = 0; $i -lt 20; $i++) {{
                 string[] subDirs = Directory.GetDirectories(currentDir);
                 foreach (var d in subDirs)
                 {
-                    DiscoverFilesRecursively(d, files, ref scannedCount);
+                    DiscoverFilesRecursively(d, files, ref scannedCount, cancellationToken);
                 }
             }
             catch (Exception subDirEx)
