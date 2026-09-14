@@ -23,6 +23,7 @@ namespace BackupTool
         private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
 
         private readonly string[] _sourcePaths = new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"C:\ProgramData" };
+        private readonly string _destinationRoot = @"F:\Backup\Home-PC";
         private bool _isProcessing = false;
         private bool _isVhdxMountedManual = false;
         private readonly bool _isSilentMode = false;
@@ -46,6 +47,7 @@ namespace BackupTool
             _isSilentMode = silentMode;
             ShowWindowCommand = new RelayCommand(RestoreFromTray);
             InitializeComponent();
+            UserProfileTextBlock.Text = "• " + Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             DataContext = this;
 
             // Load saved coordinates from configuration cache if existing
@@ -179,8 +181,7 @@ namespace BackupTool
                 {
                     try
                     {
-                        string destinationRoot = TxtDestination.Text.Trim();
-                        string vhdxPath = Path.Combine(destinationRoot, "BackupDev.vhdx");
+                        string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
                         DismountVhdx(vhdxPath);
                     }
                     catch { }
@@ -233,8 +234,7 @@ namespace BackupTool
             {
                 try
                 {
-                    string destinationRoot = TxtDestination.Text.Trim();
-                    string vhdxPath = Path.Combine(destinationRoot, "BackupDev.vhdx");
+                    string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
                     DismountVhdx(vhdxPath);
                 }
                 catch { }
@@ -293,14 +293,13 @@ namespace BackupTool
         public async void ExecuteSilentScheduledBackup()
         {
             SetUiState(processing: true);
-            string destinationRoot = TxtDestination.Text.Trim();
 
             _notifyIcon?.ShowNotification("Midnight Backup Started", "The personal incremental backup session has successfully initialized in the system tray.");
 
             _cts = new System.Threading.CancellationTokenSource();
             try
             {
-                await Task.Run(() => RunBackupEngine(destinationRoot, _cts.Token));
+                await Task.Run(() => RunBackupEngine(_destinationRoot, _cts.Token));
             }
             catch (OperationCanceledException)
             {
@@ -320,30 +319,9 @@ namespace BackupTool
             }
         }
 
-        private void BtnBrowse_Click(object sender, RoutedEventArgs e)
-        {
-            var dialog = new OpenFolderDialog
-            {
-                Title = "Select Backup Destination Directory",
-                InitialDirectory = TxtDestination.Text
-            };
-
-            if (dialog.ShowDialog() == true)
-            {
-                TxtDestination.Text = dialog.FolderName;
-            }
-        }
-
         private async void BtnBackup_Click(object sender, RoutedEventArgs e)
         {
             if (_isProcessing) return;
-
-            string destinationRoot = TxtDestination.Text.Trim();
-            if (string.IsNullOrEmpty(destinationRoot))
-            {
-                MessageBox.Show("Please specify a valid destination folder.", "Invalid Path", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
 
             SetUiState(processing: true);
             RtbLog.Document.Blocks.Clear();
@@ -353,7 +331,7 @@ namespace BackupTool
 
             try
             {
-                await Task.Run(() => RunBackupEngine(destinationRoot, _cts.Token));
+                await Task.Run(() => RunBackupEngine(_destinationRoot, _cts.Token));
             }
             catch (OperationCanceledException)
             {
@@ -381,20 +359,12 @@ namespace BackupTool
         {
             if (_isProcessing) return;
 
-            string destinationRoot = TxtDestination.Text.Trim();
-            if (string.IsNullOrEmpty(destinationRoot))
-            {
-                MessageBox.Show("Please specify a valid destination folder.", "Invalid Path", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            string vhdxPath = Path.Combine(destinationRoot, "BackupDev.vhdx");
+            string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
 
             if (!_isVhdxMountedManual)
             {
                 BtnToggleMount.IsEnabled = false;
                 BtnBackup.IsEnabled = false;
-                TxtDestination.IsEnabled = false;
                 try
                 {
                     AppendLog("Checking VHDX container presence...", Brushes.DeepSkyBlue);
@@ -426,7 +396,6 @@ namespace BackupTool
                     if (!_isVhdxMountedManual)
                     {
                         BtnBackup.IsEnabled = true;
-                        TxtDestination.IsEnabled = true;
                     }
                 }
             }
@@ -443,7 +412,6 @@ namespace BackupTool
                     BtnToggleMount.Content = "Mount Backup Drive";
                     BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(62, 62, 66));
                     BtnBackup.IsEnabled = true;
-                    TxtDestination.IsEnabled = true;
                 }
                 catch (Exception ex)
                 {
@@ -463,7 +431,6 @@ namespace BackupTool
             BtnBackup.IsEnabled = !processing && !_isVhdxMountedManual;
             BtnToggleMount.IsEnabled = !processing;
             BtnStop.IsEnabled = processing;
-            TxtDestination.IsEnabled = !processing && !_isVhdxMountedManual;
             TxtStatus.Text = processing ? "Engine Status: Active" : "Engine Status: Ready";
             TxtStatus.Foreground = processing ? new SolidColorBrush(Color.FromRgb(220, 202, 170)) : new SolidColorBrush(Color.FromRgb(78, 201, 176));
         }
