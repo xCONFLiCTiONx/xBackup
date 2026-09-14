@@ -609,6 +609,36 @@ namespace xBackup
                     }
                 }
 
+                // --- Purge Phase (File Deletions) ---
+                long purgedFilesCount = 0;
+                long purgedDirsCount = 0;
+                try
+                {
+                    AppendLog("Commencing deletion/purge phase for removed files...", Brushes.DeepSkyBlue);
+                    foreach (var sourceRoot in _sourcePaths)
+                    {
+                        string driveFolder = MapToBackupPath(sourceRoot);
+                        string destRootFolder = Path.Combine(mountedDrive, driveFolder);
+
+                        if (Directory.Exists(destRootFolder))
+                        {
+                            PurgeDeletedFilesAndDirs(destRootFolder, sourceRoot, cancellationToken, ref purgedFilesCount, ref purgedDirsCount);
+                        }
+                    }
+                    if (purgedFilesCount > 0 || purgedDirsCount > 0)
+                    {
+                        AppendLog($"Purge complete. Removed {purgedFilesCount:N0} files and {purgedDirsCount:N0} directories from backup that no longer exist in source.", Brushes.LightGreen);
+                    }
+                    else
+                    {
+                        AppendLog("Purge phase complete. Destination is fully synchronized (no orphan files found).", Brushes.Gray);
+                    }
+                }
+                catch (Exception purgeEx)
+                {
+                    AppendLog($"Warning: Purge phase encountered an error ({purgeEx.Message})", Brushes.Orange);
+                }
+
                 try
                 {
                     string historyDir = Path.Combine(destRoot, "BackupHistoryLogs");
@@ -627,6 +657,8 @@ namespace xBackup
                         sw.WriteLine($"Successfully Mirrored / Copied     : {backedUpCount:N0}");
                         sw.WriteLine($"Up-to-Date (Skipped Unchanged)     : {upToDateCount:N0}");
                         sw.WriteLine($"Locked / Bypassed System Files      : {lockedCount:N0}");
+                        sw.WriteLine($"Files Purged / Cleaned Up          : {purgedFilesCount:N0}");
+                        sw.WriteLine($"Directories Purged / Cleaned Up    : {purgedDirsCount:N0}");
                         sw.WriteLine($"Total Sizing Streamed This Session : {FormatBytes(totalBytesMirrored)}");
                         sw.WriteLine("==========================================================================");
 
@@ -658,6 +690,10 @@ namespace xBackup
                 AppendLog($"Successfully Mirrored: {backedUpCount:N0} files.", Brushes.LightGreen);
                 AppendLog($"Unchanged files kept: {upToDateCount:N0} files.", Brushes.Gray);
                 AppendLog($"Locked files bypassed: {lockedCount:N0} files.", Brushes.Yellow);
+                if (purgedFilesCount > 0 || purgedDirsCount > 0)
+                {
+                    AppendLog($"Purged/Deleted from Backup: {purgedFilesCount:N0} files and {purgedDirsCount:N0} dirs.", Brushes.LightGreen);
+                }
 
                 Dispatcher.Invoke(() =>
                 {
@@ -875,6 +911,67 @@ for ($i = 0; $i -lt 20; $i++) {{
             }
         }
 
+        private void PurgeDeletedFilesAndDirs(string destDir, string sourceDir, System.Threading.CancellationToken cancellationToken, ref long purgedFiles, ref long purgedDirs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 1. Purge Files
+            try
+            {
+                string[] destFiles = Directory.GetFiles(destDir);
+                foreach (string df in destFiles)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    string fileName = Path.GetFileName(df);
+                    string sf = Path.Combine(sourceDir, fileName);
+
+                    if (!File.Exists(sf))
+                    {
+                        try
+                        {
+                            File.Delete(df);
+                            purgedFiles++;
+                        }
+                        catch (Exception ex)
+                        {
+                            _errorDetailsReport.Add($"-> Purge Failed (File): {df} | Reason: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 2. Recursively Purge Subdirectories
+            try
+            {
+                string[] destSubDirs = Directory.GetDirectories(destDir);
+                foreach (string dd in destSubDirs)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    string dirName = Path.GetFileName(dd);
+                    string sd = Path.Combine(sourceDir, dirName);
+
+                    if (!Directory.Exists(sd))
+                    {
+                        try
+                        {
+                            Directory.Delete(dd, true);
+                            purgedDirs++;
+                        }
+                        catch (Exception ex)
+                        {
+                            _errorDetailsReport.Add($"-> Purge Failed (Dir): {dd} | Reason: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        PurgeDeletedFilesAndDirs(dd, sd, cancellationToken, ref purgedFiles, ref purgedDirs);
+                    }
+                }
+            }
+            catch { }
+        }
+
         private void DiscoverFilesRecursively(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -917,6 +1014,16 @@ for ($i = 0; $i -lt 20; $i++) {{
         private bool IsPathExcluded(string fullPath)
         {
             string lower = fullPath.ToLower();
+
+            // Explicitly exclude Phone Link, Microsoft Mobile Features, and phone sync files that trigger wireless/bluetooth/cloud sync on demand
+            if (lower.Contains(@"\appdata\local\microsoft\phonelink") ||
+                lower.Contains(@"\microsoft.yourphone") ||
+                lower.Contains(@"\mobiledeviceconnect") ||
+                lower.Contains(@"\.android") ||
+                lower.Contains(@"\phone-link"))
+            {
+                return true;
+            }
 
             if (lower.Contains(@"\appdata\local\temp") ||
                 lower.Contains(@"\google\chrome\user data\default\cache") ||
