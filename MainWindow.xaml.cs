@@ -1,0 +1,917 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Documents;
+using System.Windows.Media;
+using Microsoft.Win32;
+
+namespace BackupTool
+{
+    public partial class MainWindow : Window
+    {
+        // Windows Power Management API P/Invoke definitions to keep PC awake
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern uint SetThreadExecutionState(uint esFlags);
+
+        private const uint ES_CONTINUOUS = 0x80000000;
+        private const uint ES_SYSTEM_REQUIRED = 0x00000001;
+        private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
+
+        private readonly string[] _sourcePaths = new[] { @"C:\Users\Michael", @"C:\ProgramData" };
+        private bool _isProcessing = false;
+        private bool _isVhdxMountedManual = false;
+        private readonly bool _isSilentMode = false;
+        private H.NotifyIcon.TaskbarIcon? _notifyIcon;
+        private readonly List<string> _errorDetailsReport = new List<string>();
+
+        public class RelayCommand : System.Windows.Input.ICommand
+        {
+            private readonly Action _execute;
+            public RelayCommand(Action execute) => _execute = execute;
+            public bool CanExecute(object? parameter) => true;
+            public void Execute(object? parameter) => _execute();
+            public event EventHandler? CanExecuteChanged { add { } remove { } }
+        }
+
+        public System.Windows.Input.ICommand ShowWindowCommand { get; }
+
+        public MainWindow(bool silentMode)
+        {
+            _isSilentMode = silentMode;
+            ShowWindowCommand = new RelayCommand(RestoreFromTray);
+            InitializeComponent();
+            DataContext = this;
+
+            // Load saved coordinates from configuration cache if existing
+            LoadWindowPlacementSettings();
+
+            Loaded += MainWindow_Loaded;
+            Closing += MainWindow_Closing;
+        }
+
+        private class WindowPlacementData
+        {
+            public double Left { get; set; } = -1;
+            public double Top { get; set; } = -1;
+            public double Width { get; set; } = 880;
+            public double Height { get; set; } = 620;
+            public bool IsMaximized { get; set; } = false;
+        }
+
+        private string GetConfigFilePath()
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string folder = Path.Combine(appData, "SmartBackupEngine");
+            if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
+            return Path.Combine(folder, "window_placement.json");
+        }
+
+        private void LoadWindowPlacementSettings()
+        {
+            try
+            {
+                string path = GetConfigFilePath();
+                if (File.Exists(path))
+                {
+                    string json = File.ReadAllText(path);
+                    var data = JsonSerializer.Deserialize<WindowPlacementData>(json);
+                    if (data != null)
+                    {
+                        if (data.IsMaximized)
+                        {
+                            WindowState = WindowState.Maximized;
+                        }
+
+                        if (data.Left >= 0 && data.Top >= 0 && data.Left + 100 < SystemParameters.VirtualScreenWidth && data.Top + 100 < SystemParameters.VirtualScreenHeight)
+                        {
+                            WindowStartupLocation = WindowStartupLocation.Manual;
+                            Left = data.Left;
+                            Top = data.Top;
+                            Width = data.Width;
+                            Height = data.Height;
+                            return;
+                        }
+                    }
+                }
+            }
+            catch { }
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        }
+
+        private void SaveWindowPlacementSettings()
+        {
+            try
+            {
+                string path = GetConfigFilePath();
+                var data = new WindowPlacementData();
+
+                if (WindowState == WindowState.Maximized)
+                {
+                    data.IsMaximized = true;
+                    data.Left = RestoreBounds.Left;
+                    data.Top = RestoreBounds.Top;
+                    data.Width = RestoreBounds.Width;
+                    data.Height = RestoreBounds.Height;
+                }
+                else
+                {
+                    data.IsMaximized = false;
+                    data.Left = Left;
+                    data.Top = Top;
+                    data.Width = Width;
+                    data.Height = Height;
+                }
+
+                string json = JsonSerializer.Serialize(data);
+                File.WriteAllText(path, json);
+            }
+            catch { }
+        }
+
+        private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Initialize system tray notify icon
+                _notifyIcon = (H.NotifyIcon.TaskbarIcon)FindResource("NotifyIcon");
+
+                // Route the native tray double-click event to open the interface monitor GUI cleanly
+                _notifyIcon.TrayMouseDoubleClick += (s, args) => RestoreFromTray();
+
+                _notifyIcon.ForceCreate();
+            }
+            catch (Exception iconEx)
+            {
+                MessageBox.Show($"SYSTEM TRAY ICON CRASH: {iconEx.Message}\n\nInner details: {iconEx.InnerException?.Message}", "Tray Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+
+            try
+            {
+                UpdateTaskSchedulerStatus();
+            }
+            catch (Exception taskEx)
+            {
+                MessageBox.Show($"SCHEDULER STATUS UTILITY CRASH: {taskEx.Message}", "Scheduler Check Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+        {
+            // Save coordinates on exit
+            SaveWindowPlacementSettings();
+
+            // If the user clicks close button while background engine processing, minimize to system tray instead of aborting
+            if (_isProcessing)
+            {
+                e.Cancel = true;
+                Hide();
+                _notifyIcon?.ShowNotification("Backup Active", "The Backup execution is still running in the background system tray.");
+            }
+            else
+            {
+                if (_isVhdxMountedManual)
+                {
+                    try
+                    {
+                        string destinationRoot = TxtDestination.Text.Trim();
+                        string vhdxPath = Path.Combine(destinationRoot, "BackupDev.vhdx");
+                        DismountVhdx(vhdxPath);
+                    }
+                    catch { }
+                }
+                _notifyIcon?.Dispose();
+            }
+        }
+
+        private void RestoreFromTray()
+        {
+            Show();
+
+            try
+            {
+                string path = GetConfigFilePath();
+                if (File.Exists(path))
+                {
+                    string json = File.ReadAllText(path);
+                    var data = JsonSerializer.Deserialize<WindowPlacementData>(json);
+                    if (data != null && data.IsMaximized)
+                    {
+                        WindowState = WindowState.Maximized;
+                        Activate();
+                        return;
+                    }
+                }
+            }
+            catch { }
+
+            WindowState = WindowState.Normal;
+            Activate();
+        }
+
+        private void MenuShow_Click(object sender, RoutedEventArgs e) => RestoreFromTray();
+
+        private void MenuExit_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isProcessing)
+            {
+                var res = MessageBox.Show(
+                    "Backup engine is actively processing entries. Are you sure you want to force terminate the application operation?",
+                    "Confirm Forced Termination",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning
+                );
+                if (res != MessageBoxResult.Yes) return;
+            }
+
+            if (_isVhdxMountedManual)
+            {
+                try
+                {
+                    string destinationRoot = TxtDestination.Text.Trim();
+                    string vhdxPath = Path.Combine(destinationRoot, "BackupDev.vhdx");
+                    DismountVhdx(vhdxPath);
+                }
+                catch { }
+            }
+
+            _isProcessing = false;
+            SaveWindowPlacementSettings();
+            _notifyIcon?.Dispose();
+
+            Environment.Exit(0);
+        }
+
+        private void UpdateTaskSchedulerStatus()
+        {
+            bool exists = TaskSchedulerHelper.DoesTaskExist();
+            if (exists)
+            {
+                BtnScheduleTask.Content = "Unregister Backup Task";
+            }
+            else
+            {
+                BtnScheduleTask.Content = "Register Midnight Wake Task";
+            }
+        }
+
+        private void BtnScheduleTask_Click(object sender, RoutedEventArgs e)
+        {
+            if (TaskSchedulerHelper.DoesTaskExist())
+            {
+                TaskSchedulerHelper.DeleteBackupTask();
+                UpdateTaskSchedulerStatus();
+                MessageBox.Show("Automated daily backup task removed completely from Windows Task Scheduler.", "Task Removed", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                if (!TaskSchedulerHelper.IsRunningAsAdmin())
+                {
+                    MessageBox.Show("Modifying the Windows Task Scheduler requires high privileges. Please re-run the terminal or application window as Administrator.", "Admin Privileges Required", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                bool success = TaskSchedulerHelper.CreateDailyBackupTask();
+                UpdateTaskSchedulerStatus();
+
+                if (success)
+                {
+                    MessageBox.Show("Successfully created a high-integrity daily backup task triggered at 12:00 AM Midnight. The system settings include WakeToRun to wake your device from sleep mode.", "Task Registered", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show("Failed to create the task configuration. Make sure you are running as administrator and executing the actual standalone compiled .exe file.", "Scheduling Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+        }
+
+        public async void ExecuteSilentScheduledBackup()
+        {
+            SetUiState(processing: true);
+            string destinationRoot = TxtDestination.Text.Trim();
+
+            _notifyIcon?.ShowNotification("Midnight Backup Started", "The personal incremental backup session has successfully initialized in the system tray.");
+
+            await Task.Run(() => RunBackupEngine(destinationRoot));
+
+            SetUiState(processing: false);
+
+            if (Visibility != Visibility.Visible)
+            {
+                _notifyIcon?.Dispose();
+                Application.Current.Shutdown();
+            }
+        }
+
+        private void BtnBrowse_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new OpenFolderDialog
+            {
+                Title = "Select Backup Destination Directory",
+                InitialDirectory = TxtDestination.Text
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                TxtDestination.Text = dialog.FolderName;
+            }
+        }
+
+        private async void BtnBackup_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isProcessing) return;
+
+            string destinationRoot = TxtDestination.Text.Trim();
+            if (string.IsNullOrEmpty(destinationRoot))
+            {
+                MessageBox.Show("Please specify a valid destination folder.", "Invalid Path", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            SetUiState(processing: true);
+            RtbLog.Document.Blocks.Clear();
+            PrgBar.Value = 0;
+
+            await Task.Run(() => RunBackupEngine(destinationRoot));
+
+            SetUiState(processing: false);
+        }
+
+        private async void BtnToggleMount_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isProcessing) return;
+
+            string destinationRoot = TxtDestination.Text.Trim();
+            if (string.IsNullOrEmpty(destinationRoot))
+            {
+                MessageBox.Show("Please specify a valid destination folder.", "Invalid Path", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string vhdxPath = Path.Combine(destinationRoot, "BackupDev.vhdx");
+
+            if (!_isVhdxMountedManual)
+            {
+                BtnToggleMount.IsEnabled = false;
+                BtnBackup.IsEnabled = false;
+                TxtDestination.IsEnabled = false;
+                try
+                {
+                    AppendLog("Checking VHDX container presence...", Brushes.DeepSkyBlue);
+                    if (!File.Exists(vhdxPath))
+                    {
+                        AppendLog("VHDX container not found. Initializing automated setup...", Brushes.Orange);
+                        await Task.Run(() => EnsureVhdxExists(vhdxPath));
+                        AppendLog("VHDX container created and formatted successfully as ReFS Dev Drive.", Brushes.LightGreen);
+                    }
+
+                    AppendLog("Mounting VHDX backup drive...", Brushes.DeepSkyBlue);
+                    string driveLetter = await Task.Run(() => MountVhdxAndGetLetter(vhdxPath));
+                    AppendLog($"VHDX successfully mounted at drive {driveLetter}", Brushes.LightGreen);
+
+                    _isVhdxMountedManual = true;
+                    BtnToggleMount.Content = "Eject Drive";
+                    BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(180, 50, 50));
+
+                    Process.Start("explorer.exe", driveLetter);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"Mount failure: {ex.Message}", Brushes.Red);
+                    MessageBox.Show($"Failed to mount backup drive: {ex.Message}", "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    BtnToggleMount.IsEnabled = true;
+                    if (!_isVhdxMountedManual)
+                    {
+                        BtnBackup.IsEnabled = true;
+                        TxtDestination.IsEnabled = true;
+                    }
+                }
+            }
+            else
+            {
+                BtnToggleMount.IsEnabled = false;
+                try
+                {
+                    AppendLog("Dismounting VHDX backup drive...", Brushes.DeepSkyBlue);
+                    await Task.Run(() => DismountVhdx(vhdxPath));
+                    AppendLog("VHDX drive successfully dismounted and locked away.", Brushes.LightGreen);
+
+                    _isVhdxMountedManual = false;
+                    BtnToggleMount.Content = "Mount Backup Drive";
+                    BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(62, 62, 66));
+                    BtnBackup.IsEnabled = true;
+                    TxtDestination.IsEnabled = true;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"Dismount failure: {ex.Message}", Brushes.Red);
+                    MessageBox.Show($"Failed to dismount backup drive: {ex.Message}", "Dismount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    BtnToggleMount.IsEnabled = true;
+                }
+            }
+        }
+
+        private void SetUiState(bool processing)
+        {
+            _isProcessing = processing;
+            BtnBackup.IsEnabled = !processing && !_isVhdxMountedManual;
+            BtnToggleMount.IsEnabled = !processing;
+            TxtDestination.IsEnabled = !processing && !_isVhdxMountedManual;
+            TxtStatus.Text = processing ? "Engine Status: Active" : "Engine Status: Ready";
+            TxtStatus.Foreground = processing ? new SolidColorBrush(Color.FromRgb(220, 202, 170)) : new SolidColorBrush(Color.FromRgb(78, 201, 176));
+        }
+
+        private void RunBackupEngine(string destRoot)
+        {
+            string vhdxPath = Path.Combine(destRoot, "BackupDev.vhdx");
+            string mountedDrive = string.Empty;
+            bool newlyMounted = false;
+
+            try
+            {
+                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+                AppendLog("Initializing Automated Backup Lifecycle...", Brushes.DeepSkyBlue);
+
+                if (!Directory.Exists(destRoot))
+                {
+                    Directory.CreateDirectory(destRoot);
+                }
+
+                if (!File.Exists(vhdxPath))
+                {
+                    AppendLog("VHDX storage container absent. Building 100 GB dynamic image with ReFS Dev Drive layout...", Brushes.Orange);
+                    EnsureVhdxExists(vhdxPath);
+                    AppendLog("VHDX container created and initialized cleanly.", Brushes.LightGreen);
+                }
+
+                AppendLog("Performing strict on-demand VHDX mounting...", Brushes.DeepSkyBlue);
+                mountedDrive = MountVhdxAndGetLetter(vhdxPath);
+                newlyMounted = true;
+                AppendLog($"VHDX dynamically attached onto drive {mountedDrive}", Brushes.LightGreen);
+
+                _errorDetailsReport.Clear();
+
+                AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
+                List<string> filesToProcess = new List<string>();
+                long totalScannedCount = 0;
+
+                foreach (var sourceRoot in _sourcePaths)
+                {
+                    if (!Directory.Exists(sourceRoot))
+                    {
+                        AppendLog($"Source directory absent, skipping scope: {sourceRoot}", Brushes.Yellow);
+                        continue;
+                    }
+
+                    AppendLog($"Scanning scope: {sourceRoot}...", Brushes.Gray);
+                    DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount);
+                }
+
+                AppendLog($"Discovery finished. Total files matched on drive: {filesToProcess.Count} (Filtered out {totalScannedCount - filesToProcess.Count} junk/temp files).", Brushes.LightGreen);
+
+                Dispatcher.Invoke(() =>
+                {
+                    LblScanned.Text = filesToProcess.Count.ToString("N0");
+                    PrgBar.Maximum = filesToProcess.Count;
+                });
+
+                long backedUpCount = 0;
+                long upToDateCount = 0;
+                long lockedCount = 0;
+                long totalBytesMirrored = 0;
+
+                int currentIndex = 0;
+
+                foreach (var file in filesToProcess)
+                {
+                    currentIndex++;
+                    if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            PrgBar.Value = currentIndex;
+                            TxtProgressDetails.Text = $"Mirroring file {currentIndex:N0} of {filesToProcess.Count:N0}...";
+                            LblBackedUp.Text = backedUpCount.ToString("N0");
+                            LblUpToDate.Text = upToDateCount.ToString("N0");
+                            LblLocked.Text = lockedCount.ToString("N0");
+                            LblSavings.Text = FormatBytes(totalBytesMirrored);
+                        });
+                    }
+
+                    FileInfo sourceFi;
+                    try
+                    {
+                        sourceFi = new FileInfo(file);
+                        if (!sourceFi.Exists) continue;
+                    }
+                    catch
+                    {
+                        lockedCount++;
+                        continue;
+                    }
+
+                    string relativeStructurePath = MapToBackupPath(file);
+                    string destFilePath = Path.Combine(mountedDrive, relativeStructurePath);
+
+                    bool needsCopy = true;
+                    try
+                    {
+                        if (File.Exists(destFilePath))
+                        {
+                            var destFi = new FileInfo(destFilePath);
+                            if (destFi.Length == sourceFi.Length && destFi.LastWriteTimeUtc == sourceFi.LastWriteTimeUtc)
+                            {
+                                needsCopy = false;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        needsCopy = true;
+                    }
+
+                    if (!needsCopy)
+                    {
+                        upToDateCount++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        string? parentDir = Path.GetDirectoryName(destFilePath);
+                        if (parentDir != null && !Directory.Exists(parentDir))
+                        {
+                            Directory.CreateDirectory(parentDir);
+                        }
+
+                        File.Copy(file, destFilePath, overwrite: true);
+                        File.SetLastWriteTimeUtc(destFilePath, sourceFi.LastWriteTimeUtc);
+
+                        totalBytesMirrored += sourceFi.Length;
+                        backedUpCount++;
+
+                        if (backedUpCount <= 100 || sourceFi.Length > 50 * 1024 * 1024)
+                        {
+                            AppendLog($"[Mirror] Copied: {sourceFi.Name} ({FormatBytes(sourceFi.Length)})", Brushes.LightGreen);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        lockedCount++;
+                        _errorDetailsReport.Add($"-> {file} | Reason: {ex.Message}");
+                        if (lockedCount <= 50)
+                        {
+                            AppendLog($"Bypassed locked file: {sourceFi.Name} ({ex.Message})", Brushes.Yellow);
+                        }
+                    }
+                }
+
+                try
+                {
+                    string historyDir = Path.Combine(destRoot, "BackupHistoryLogs");
+                    if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
+
+                    string logFileName = $"BackupReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
+                    string fullLogPath = Path.Combine(historyDir, logFileName);
+
+                    using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
+                    {
+                        sw.WriteLine("==========================================================================");
+                        sw.WriteLine($"PERSONAL BACKUP ENGINE HISTORICAL EXECUTION REPORT (VHDX MIRROR)");
+                        sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                        sw.WriteLine("==========================================================================");
+                        sw.WriteLine($"Total Files Scanned on C Drive Scope: {filesToProcess.Count:N0}");
+                        sw.WriteLine($"Successfully Mirrored / Copied     : {backedUpCount:N0}");
+                        sw.WriteLine($"Up-to-Date (Skipped Unchanged)     : {upToDateCount:N0}");
+                        sw.WriteLine($"Locked / Bypassed System Files      : {lockedCount:N0}");
+                        sw.WriteLine($"Total Sizing Streamed This Session : {FormatBytes(totalBytesMirrored)}");
+                        sw.WriteLine("==========================================================================");
+
+                        if (_errorDetailsReport.Count > 0)
+                        {
+                            sw.WriteLine();
+                            sw.WriteLine("BYPASSED FILES REPORT SUMMARY DETAILS (ACCESS-LOCKED / PROTECTED):");
+                            sw.WriteLine("--------------------------------------------------------------------------");
+                            foreach (var errItem in _errorDetailsReport)
+                            {
+                                sw.WriteLine(errItem);
+                            }
+                        }
+                        else
+                        {
+                            sw.WriteLine();
+                            sw.WriteLine("Status: High-integrity run. 100% of scanned files backed up without locks.");
+                        }
+                    }
+                    AppendLog($"Historical summary session report saved: BackupHistoryLogs\\{logFileName}", Brushes.LightSeaGreen);
+                }
+                catch (Exception historyEx)
+                {
+                    AppendLog($"Warning: Could not compile historical log file ({historyEx.Message})", Brushes.Orange);
+                }
+
+                AppendLog("----------------------------------------------------------------", Brushes.Gray);
+                AppendLog($"Backup execution completed cleanly.", Brushes.DeepSkyBlue);
+                AppendLog($"Successfully Mirrored: {backedUpCount:N0} files.", Brushes.LightGreen);
+                AppendLog($"Unchanged files kept: {upToDateCount:N0} files.", Brushes.Gray);
+                AppendLog($"Locked files bypassed: {lockedCount:N0} files.", Brushes.Yellow);
+
+                Dispatcher.Invoke(() =>
+                {
+                    TxtProgressDetails.Text = "Backup Complete!";
+                    LblBackedUp.Text = backedUpCount.ToString("N0");
+                    LblUpToDate.Text = upToDateCount.ToString("N0");
+                    LblLocked.Text = lockedCount.ToString("N0");
+                    LblSavings.Text = FormatBytes(totalBytesMirrored);
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Engine failure: {ex.Message}", Brushes.Red);
+            }
+            finally
+            {
+                if (newlyMounted)
+                {
+                    try
+                    {
+                        AppendLog("Issuing automated full closed-lifecycle disk auto-dismount...", Brushes.DeepSkyBlue);
+                        DismountVhdx(vhdxPath);
+                        AppendLog("VHDX safely detached and isolated.", Brushes.LightGreen);
+                    }
+                    catch (Exception dex)
+                    {
+                        AppendLog($"Auto-dismount alert: {dex.Message}", Brushes.Orange);
+                    }
+                }
+                SetThreadExecutionState(ES_CONTINUOUS);
+            }
+        }
+
+        private void EnsureVhdxExists(string vhdxPath)
+        {
+            string? dir = Path.GetDirectoryName(vhdxPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            // Create and format VHDX as a Dev Drive / ReFS volume using precise sequence
+            // We include the 'devdrv' flag to ensure compatibility on systems where standard ReFS is restricted
+            string diskpartScript = $@"create vdisk file=""{vhdxPath}"" maximum=102400 type=expandable
+select vdisk file=""{vhdxPath}""
+attach vdisk
+create partition primary
+format fs=refs devdrv label=""BackupReFS"" quick
+assign letter=Z
+exit";
+
+            RunDiskpartScript(diskpartScript);
+
+            // Set Dev Drive trust flag to complete initialization parameters correctly
+            try
+            {
+                RunSystemCommand("fsutil.exe", "devdrv trust /vol:Z:");
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Dev Drive trust warning: {ex.Message}", Brushes.Orange);
+            }
+
+            // Cleanly detach disk so it stays closed lifecycle ready
+            string detachScript = $@"select vdisk file=""{vhdxPath}""
+detach vdisk
+exit";
+            RunDiskpartScript(detachScript);
+        }
+
+        private static void RunDiskpartScript(string scriptContent)
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"vhdx_op_{Guid.NewGuid()}.txt");
+            File.WriteAllText(scriptPath, scriptContent);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "diskpart.exe",
+                Arguments = $"/s \"{scriptPath}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using (var process = Process.Start(startInfo))
+            {
+                if (process == null) throw new Exception("Failed to invoke diskpart utility.");
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+
+                try { File.Delete(scriptPath); } catch { }
+
+                if (process.ExitCode != 0)
+                {
+                    throw new Exception($"Diskpart allocation failed ({process.ExitCode}). Log: {output} Error: {error}");
+                }
+            }
+        }
+
+        private static void RunSystemCommand(string fileName, string arguments)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using (var process = Process.Start(startInfo))
+            {
+                if (process == null) throw new Exception($"Failed to invoke system utility: {fileName}");
+                process.WaitForExit();
+                if (process.ExitCode != 0)
+                {
+                    string error = process.StandardError.ReadToEnd();
+                    throw new Exception($"Utility {fileName} failed with exit code {process.ExitCode}. Error: {error}");
+                }
+            }
+        }
+
+        private static string MountVhdxAndGetLetter(string vhdxPath)
+        {
+            RunPowerShell($"Mount-DiskImage -ImagePath \"{vhdxPath}\"");
+
+            for (int i = 0; i < 20; i++)
+            {
+                string letter = RunPowerShell($"(Get-DiskImage -ImagePath \"{vhdxPath}\" | Get-Volume).DriveLetter").Trim();
+                if (!string.IsNullOrEmpty(letter) && letter.Length == 1 && char.IsLetter(letter[0]))
+                {
+                    return letter + ":";
+                }
+                System.Threading.Thread.Sleep(500);
+            }
+            throw new Exception("VHDX container mounted successfully, but target letter discovery timed out.");
+        }
+
+        private static void DismountVhdx(string vhdxPath)
+        {
+            RunPowerShell($"Dismount-DiskImage -ImagePath \"{vhdxPath}\"");
+        }
+
+        private static string RunPowerShell(string command)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -NonInteractive -Command \"{command.Replace("\"", "\\\"")}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using (var process = Process.Start(startInfo))
+            {
+                if (process == null) throw new Exception("Failed to initialize system powershell environment.");
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+
+                if (process.ExitCode != 0)
+                {
+                    throw new Exception($"Storage automation cmdlet failed. Error: {error}");
+                }
+                return output;
+            }
+        }
+
+        private void DiscoverFilesRecursively(string currentDir, List<string> files, ref long scannedCount)
+        {
+            if (IsPathExcluded(currentDir)) return;
+
+            try
+            {
+                string[] dirFiles = Directory.GetFiles(currentDir);
+                foreach (var f in dirFiles)
+                {
+                    scannedCount++;
+                    if (!IsPathExcluded(f))
+                    {
+                        files.Add(f);
+                    }
+                }
+            }
+            catch (Exception dirEx)
+            {
+                scannedCount++;
+                _errorDetailsReport.Add($"-> Scope Folder Lock: {currentDir} | Reason: Access Denied ({dirEx.Message})");
+                return;
+            }
+
+            try
+            {
+                string[] subDirs = Directory.GetDirectories(currentDir);
+                foreach (var d in subDirs)
+                {
+                    DiscoverFilesRecursively(d, files, ref scannedCount);
+                }
+            }
+            catch (Exception subDirEx)
+            {
+                _errorDetailsReport.Add($"-> Subfolder Tree Lock: {currentDir} | Reason: Bypassed Subdirectories traversal ({subDirEx.Message})");
+            }
+        }
+
+        private bool IsPathExcluded(string fullPath)
+        {
+            string lower = fullPath.ToLower();
+
+            if (lower.Contains(@"\appdata\local\temp") ||
+                lower.Contains(@"\google\chrome\user data\default\cache") ||
+                lower.Contains(@"\microsoft\windows\inetcache") ||
+                lower.Contains(@"\discord\cache") ||
+                lower.Contains(@"\code\cache") ||
+                lower.Contains(@"\code\cacheddata") ||
+                lower.Contains(@"\node_modules") ||
+                lower.Contains(@"\programdata\package cache") ||
+                lower.Contains(@"\microsoft\windows\defender\support") ||
+                lower.Contains(@"\$recycle.bin") ||
+                lower.Contains(@"\system volume information") ||
+                lower.Contains(@"\windows\temp") ||
+                lower.Contains(@"\windows\prefetch") ||
+                lower.Contains(@"\windows\softwaredistribution") ||
+                lower.Contains(@"\windows\installer") ||
+                lower.EndsWith("pagefile.sys") ||
+                lower.EndsWith("swapfile.sys") ||
+                lower.EndsWith("hiberfil.sys"))
+            {
+                return true;
+            }
+
+            if (lower.Contains(@"\appdata\local\packages\") && lower.Contains(@"\localcache"))
+            {
+                return true;
+            }
+
+            if (lower.Contains(@"\bin\") || lower.Contains(@"\obj\") || lower.EndsWith(@"\bin") || lower.EndsWith(@"\obj"))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private string MapToBackupPath(string fullPath)
+        {
+            if (fullPath.Length >= 3 && fullPath[1] == ':' && fullPath[2] == '\\')
+            {
+                char driveLetter = fullPath[0];
+                return $"Drive_{driveLetter}" + fullPath.Substring(2);
+            }
+            return fullPath;
+        }
+
+        private string FormatBytes(long bytes)
+        {
+            string[] suffix = { "B", "KB", "MB", "GB", "TB" };
+            double dblBytes = bytes;
+            int i = 0;
+            while (dblBytes >= 1024 && i < suffix.Length - 1)
+            {
+                i++;
+                dblBytes /= 1024;
+            }
+            return $"{dblBytes:F2} {suffix[i]}";
+        }
+
+        private void AppendLog(string message, Brush color)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                Run run = new Run($"[{DateTime.Now:HH:mm:ss}] {message}\n") { Foreground = color };
+                Paragraph para = new Paragraph(run) { Margin = new Thickness(0), LineHeight = 16 };
+                RtbLog.Document.Blocks.Add(para);
+
+                if (RtbLog.Document.Blocks.Count > 1200)
+                {
+                    RtbLog.Document.Blocks.Remove(RtbLog.Document.Blocks.FirstBlock);
+                }
+
+                LogScrollViewer.ScrollToEnd();
+            });
+        }
+    }
+}
