@@ -23,7 +23,7 @@ namespace xBackup
         private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
 
         private readonly string[] _sourcePaths = new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"C:\ProgramData" };
-        private readonly string _destinationRoot = @"F:\Backup\Home-PC";
+        private string _destinationRoot = @"F:\Backup\Home-PC";
         private bool _isProcessing = false;
         private bool _isVhdxMountedManual = false;
         private readonly bool _isSilentMode = false;
@@ -55,6 +55,21 @@ namespace xBackup
 
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
+        }
+
+        private void BtnBrowseDest_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Select Backup Destination Folder Root",
+                InitialDirectory = _destinationRoot
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                TxtDestRoot.Text = dialog.FolderName;
+                _destinationRoot = dialog.FolderName;
+            }
         }
 
         private class WindowPlacementData
@@ -323,6 +338,9 @@ namespace xBackup
         {
             if (_isProcessing) return;
 
+            // Sync from GUI configurations dynamically
+            _destinationRoot = TxtDestRoot.Text;
+
             SetUiState(processing: true);
             RtbLog.Document.Blocks.Clear();
             PrgBar.Value = 0;
@@ -350,6 +368,7 @@ namespace xBackup
             if (_isProcessing && _cts != null)
             {
                 AppendLog("Issue Stop Signal... Waiting for engine to cycle down.", Brushes.Yellow);
+                PrgWaiting.Visibility = Visibility.Visible;
                 _cts.Cancel();
                 BtnStop.IsEnabled = false;
             }
@@ -358,6 +377,9 @@ namespace xBackup
         private async void BtnToggleMount_Click(object sender, RoutedEventArgs e)
         {
             if (_isProcessing) return;
+
+            // Sync from GUI configurations dynamically
+            _destinationRoot = TxtDestRoot.Text;
 
             string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
 
@@ -507,18 +529,21 @@ namespace xBackup
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     currentIndex++;
-                    if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
+
+                    // Always show the current file in the status text so user knows exactly what the engine is working on
+                    Dispatcher.Invoke(() =>
                     {
-                        Dispatcher.Invoke(() =>
+                        TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToProcess.Count:N0}] Processing: {file}";
+
+                        if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
                         {
                             PrgBar.Value = currentIndex;
-                            TxtProgressDetails.Text = $"Mirroring file {currentIndex:N0} of {filesToProcess.Count:N0}...";
                             LblBackedUp.Text = backedUpCount.ToString("N0");
                             LblUpToDate.Text = upToDateCount.ToString("N0");
                             LblLocked.Text = lockedCount.ToString("N0");
                             LblSavings.Text = FormatBytes(totalBytesMirrored);
-                        });
-                    }
+                        }
+                    });
 
                     FileInfo sourceFi;
                     try
@@ -561,6 +586,8 @@ namespace xBackup
                     string tempFilePath = destFilePath + ".tmp";
                     try
                     {
+                        AppendLog($"[Copying] {sourceFi.Name} ({FormatBytes(sourceFi.Length)})...", Brushes.Gray);
+
                         string? parentDir = Path.GetDirectoryName(destFilePath);
                         if (parentDir != null && !Directory.Exists(parentDir))
                         {
@@ -744,13 +771,22 @@ namespace xBackup
                 Directory.CreateDirectory(dir);
             }
 
+            string driveLetterStr = "Z";
+            Dispatcher.Invoke(() =>
+            {
+                if (CboDriveLetter.SelectedItem is System.Windows.Controls.ComboBoxItem item)
+                {
+                    driveLetterStr = item.Content.ToString() ?? "Z";
+                }
+            });
+
             // Create and partition VHDX using DiskPart.
             // We separate 'format' from DiskPart to handle the /devdrv flag compatibility and provide fallbacks.
             string diskpartSetup = $@"create vdisk file=""{vhdxPath}"" maximum=102400 type=expandable
 select vdisk file=""{vhdxPath}""
 attach vdisk
 create partition primary
-assign letter=Z
+assign letter={driveLetterStr}
 exit";
 
             try
@@ -761,21 +797,21 @@ exit";
                 // DiskPart's internal 'format' command often lacks support for the 'devdrv' flag or fails on Home editions.
                 try
                 {
-                    RunPowerShell("Format-Volume -DriveLetter Z -FileSystem ReFS -DevDrive -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
+                    RunPowerShell($"Format-Volume -DriveLetter {driveLetterStr} -FileSystem ReFS -DevDrive -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
                     // Apply Dev Drive trust policy for performance optimization
-                    try { RunSystemCommand("fsutil.exe", "devdrv trust /vol:Z:"); } catch { }
+                    try { RunSystemCommand("fsutil.exe", $"devdrv trust /vol:{driveLetterStr}:"); } catch { }
                 }
                 catch
                 {
                     // Fallback 1: Standard ReFS (Non-Dev Drive) - Works on Pro/Enterprise editions
                     try
                     {
-                        RunPowerShell("Format-Volume -DriveLetter Z -FileSystem ReFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
+                        RunPowerShell($"Format-Volume -DriveLetter {driveLetterStr} -FileSystem ReFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
                     }
                     catch
                     {
                         // Fallback 2: Standard NTFS - Works on all Windows versions including Home
-                        RunPowerShell("Format-Volume -DriveLetter Z -FileSystem NTFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
+                        RunPowerShell($"Format-Volume -DriveLetter {driveLetterStr} -FileSystem NTFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
                     }
                 }
             }
