@@ -2,7 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Security.Principal;
 
-namespace BackupTool
+namespace xBackup
 {
     public static class TaskSchedulerHelper
     {

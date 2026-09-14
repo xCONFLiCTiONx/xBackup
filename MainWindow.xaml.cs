@@ -10,7 +10,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using Microsoft.Win32;
 
-namespace BackupTool
+namespace xBackup
 {
     public partial class MainWindow : Window
     {

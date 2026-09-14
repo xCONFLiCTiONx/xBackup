@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows;
 
-namespace BackupTool
+namespace xBackup
 {
     public partial class App : Application
     {
