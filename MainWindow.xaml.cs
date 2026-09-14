@@ -365,6 +365,7 @@ namespace xBackup
             {
                 BtnToggleMount.IsEnabled = false;
                 BtnBackup.IsEnabled = false;
+                PrgWaiting.Visibility = Visibility.Visible;
                 try
                 {
                     AppendLog("Checking VHDX container presence...", Brushes.DeepSkyBlue);
@@ -393,6 +394,7 @@ namespace xBackup
                 finally
                 {
                     BtnToggleMount.IsEnabled = true;
+                    PrgWaiting.Visibility = Visibility.Collapsed;
                     if (!_isVhdxMountedManual)
                     {
                         BtnBackup.IsEnabled = true;
@@ -402,6 +404,7 @@ namespace xBackup
             else
             {
                 BtnToggleMount.IsEnabled = false;
+                PrgWaiting.Visibility = Visibility.Visible;
                 try
                 {
                     AppendLog("Dismounting VHDX backup drive...", Brushes.DeepSkyBlue);
@@ -421,6 +424,7 @@ namespace xBackup
                 finally
                 {
                     BtnToggleMount.IsEnabled = true;
+                    PrgWaiting.Visibility = Visibility.Collapsed;
                 }
             }
         }
@@ -453,15 +457,18 @@ namespace xBackup
 
                 if (!File.Exists(vhdxPath))
                 {
+                    Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Visible);
                     AppendLog("VHDX storage container absent. Building 100 GB dynamic image with ReFS Dev Drive layout...", Brushes.Orange);
                     EnsureVhdxExists(vhdxPath);
                     AppendLog("VHDX container created and initialized cleanly.", Brushes.LightGreen);
                 }
 
                 AppendLog("Performing strict on-demand VHDX mounting...", Brushes.DeepSkyBlue);
+                Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Visible);
                 mountedDrive = MountVhdxAndGetLetter(vhdxPath);
                 newlyMounted = true;
                 AppendLog($"VHDX dynamically attached onto drive {mountedDrive}", Brushes.LightGreen);
+                Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Collapsed);
 
                 _errorDetailsReport.Clear();
 
@@ -551,6 +558,7 @@ namespace xBackup
                         continue;
                     }
 
+                    string tempFilePath = destFilePath + ".tmp";
                     try
                     {
                         string? parentDir = Path.GetDirectoryName(destFilePath);
@@ -559,7 +567,18 @@ namespace xBackup
                             Directory.CreateDirectory(parentDir);
                         }
 
-                        File.Copy(file, destFilePath, overwrite: true);
+                        // Copy to a temporary file first to protect against partial copies/power outages
+                        File.Copy(file, tempFilePath, overwrite: true);
+
+                        // Verify that the temporary file was written completely and correctly
+                        var tempFi = new FileInfo(tempFilePath);
+                        if (!tempFi.Exists || tempFi.Length != sourceFi.Length)
+                        {
+                            throw new IOException("Verification failed: Copied file size does not match source file size.");
+                        }
+
+                        // Atomically replace/move to the final destination path
+                        File.Move(tempFilePath, destFilePath, overwrite: true);
                         File.SetLastWriteTimeUtc(destFilePath, sourceFi.LastWriteTimeUtc);
 
                         totalBytesMirrored += sourceFi.Length;
@@ -567,11 +586,20 @@ namespace xBackup
 
                         if (backedUpCount <= 100 || sourceFi.Length > 50 * 1024 * 1024)
                         {
-                            AppendLog($"[Mirror] Copied: {sourceFi.Name} ({FormatBytes(sourceFi.Length)})", Brushes.LightGreen);
+                            AppendLog($"[Mirror] Copied & Verified: {sourceFi.Name} ({FormatBytes(sourceFi.Length)})", Brushes.LightGreen);
                         }
                     }
                     catch (Exception ex)
                     {
+                        try
+                        {
+                            if (File.Exists(tempFilePath))
+                            {
+                                File.Delete(tempFilePath);
+                            }
+                        }
+                        catch { /* Ignore cleanup errors to retain original exception context */ }
+
                         lockedCount++;
                         _errorDetailsReport.Add($"-> {file} | Reason: {ex.Message}");
                         if (lockedCount <= 50)
@@ -655,12 +683,17 @@ namespace xBackup
                     try
                     {
                         AppendLog("Issuing automated full closed-lifecycle disk auto-dismount...", Brushes.DeepSkyBlue);
+                        Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Visible);
                         DismountVhdx(vhdxPath);
                         AppendLog("VHDX safely detached and isolated.", Brushes.LightGreen);
                     }
                     catch (Exception dex)
                     {
                         AppendLog($"Auto-dismount alert: {dex.Message}", Brushes.Orange);
+                    }
+                    finally
+                    {
+                        Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Collapsed);
                     }
                 }
                 SetThreadExecutionState(ES_CONTINUOUS);
