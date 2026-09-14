@@ -1056,7 +1056,8 @@ for ($i = 0; $i -lt 20; $i++) {{
                 lower.Contains(@"\microsoft.yourphone") ||
                 lower.Contains(@"\mobiledeviceconnect") ||
                 lower.Contains(@"\.android") ||
-                lower.Contains(@"\phone-link"))
+                lower.Contains(@"\phone-link") ||
+                lower.Contains(@"\crossdevice"))
             {
                 return true;
             }
