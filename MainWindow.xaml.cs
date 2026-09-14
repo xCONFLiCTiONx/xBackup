@@ -891,8 +891,17 @@ exit";
             }
         }
 
-        private static string MountVhdxAndGetLetter(string vhdxPath)
+        private string MountVhdxAndGetLetter(string vhdxPath)
         {
+            string driveLetterStr = "Z";
+            Dispatcher.Invoke(() =>
+            {
+                if (CboDriveLetter.SelectedItem is System.Windows.Controls.ComboBoxItem item)
+                {
+                    driveLetterStr = item.Content.ToString() ?? "Z";
+                }
+            });
+
             // We run the retry logic inside PowerShell to avoid the overhead of starting multiple processes,
             // and use a more robust discovery path through Get-Disk and Get-Partition.
             // We MUST discard the output of Mount-DiskImage ($null = ...) otherwise it pollutes the return string.
@@ -902,9 +911,14 @@ $null = Mount-DiskImage -ImagePath $path -StorageType VHDX -ErrorAction Silently
 for ($i = 0; $i -lt 20; $i++) {{
     $di = Get-DiskImage -ImagePath $path;
     if ($di.Number -ne $null) {{
-        $letter = (Get-Disk -Number $di.Number | Get-Partition | Where-Object DriveLetter).DriveLetter;
-        if ($letter) {{
-            Write-Output $letter;
+        $disk = Get-Disk -Number $di.Number;
+        # Force/assign the specific requested drive letter if it hasn't matched yet
+        $part = Get-Partition -DiskNumber $di.Number | Where-Object {{ $_.DriveLetter }}
+        if ($part) {{
+            if ($part.DriveLetter -ne '{driveLetterStr}') {{
+                Set-Partition -DiskNumber $di.Number -PartitionNumber $part.PartitionNumber -NewDriveLetter '{driveLetterStr}' -ErrorAction SilentlyContinue;
+            }}
+            Write-Output '{driveLetterStr}';
             return;
         }}
     }}

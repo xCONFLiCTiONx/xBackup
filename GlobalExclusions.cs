@@ -80,7 +80,6 @@ namespace xBackup
             if (lower.Contains(@"\appdata\local\microsoft\phonelink") ||
                 lower.Contains(@"\microsoft.yourphone") ||
                 lower.Contains(@"\mobiledeviceconnect") ||
-                lower.Contains(@"\.android") ||
                 lower.Contains(@"\phone-link") ||
                 lower.Contains(@"\crossdevice"))
             {
