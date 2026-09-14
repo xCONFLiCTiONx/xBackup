@@ -1,3 +1,5 @@
+<img src="icon.png" width="64" align="left" style="margin-right: 20px; border-radius: 10px;">
+
 # Smart Personal Backup Engine
 
 A high-performance, automated, incremental backup utility for Windows designed to cleanly mirror critical system and profile folders into an isolated, high-integrity virtual disk container.
