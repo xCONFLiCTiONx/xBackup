@@ -86,15 +86,64 @@ namespace xBackup
                 return true;
             }
 
-            if (lower.Contains(@"\appdata\local\temp") ||
+            // User requested specific exclusions
+            if (lower.Contains(@"\appdata\locallow") ||
+                lower.Contains(@"\appdata\local\packages") ||
+                lower.Contains(@"\programdata\packages") ||
+                lower.Contains(@"\programdata\microsoft\windows defender") ||
+                lower.Contains(@"\programdata\microsoft\crypto") ||
+                lower.Contains(@"\application data") ||
+                lower.Contains(@"\history") ||
+                lower.Contains(@"\cookies") ||
+                lower.Contains(@"\local settings") ||
+                lower.Contains(@"\nethood") ||
+                lower.Contains(@"\printhood") ||
+                lower.Contains(@"\recent") ||
+                lower.Contains(@"\sendto") ||
+                lower.Contains(@"\start menu") ||
+                lower.Contains(@"\templates") ||
+                lower.Contains(@"\appdata\local\google\androidstudio") ||
+                lower.Contains(@"\appdata\local\temp") ||
+                lower.Contains(@"\appdata\local\microsoft\windows\inetcache") ||
+                lower.Contains(@"\appdata\local\microsoft\edge\user data") ||
+                lower.Contains(@"\appdata\local\nvidia\dxcache") ||
+                lower.Contains(@"\appdata\local\nvidia\d3dscache") ||
+                lower.Contains(@"\appdata\local\crashrpt") ||
+                lower.Contains(@"\._cache") ||
+                lower.Contains(@"\._javacpp") ||
+                lower.Contains(@"\._jbr") ||
+                lower.Contains(@"\._templateengine") ||
+                lower.Contains(@"\.android\cache") ||
+                lower.Contains(@"\.android\cli") ||
+                lower.Contains(@"\.android\avd\") ||
+                lower.Contains(@"\.android\studio\agent\conversations") ||
                 lower.Contains(@"\google\chrome\user data\default\cache") ||
+                lower.Contains(@"\google\chrome\user data\default\code cache") ||
+                lower.Contains(@"\google\chrome\user data\default\gpucache") ||
+                lower.Contains(@"\google\chrome\user data\default\service worker\cachestorage") ||
+                lower.Contains(@"\appdata\local\microsoft\windows\webcache") ||
+                lower.Contains(@"\appdata\local\microsoft\windows\explorer\thumbcachetodelete") ||
+                lower.Contains(@"\appdata\local\microsoft\edge\user data\default\cache") ||
+                lower.Contains(@"\appdata\local\microsoft\edge\user data\default\code cache") ||
+                lower.Contains(@"\appdata\local\microsoft\edge\user data\default\gpucache") ||
+                lower.Contains(@"\mozilla\firefox\profiles\") ||
+                lower.Contains(@"\assetcache") ||
+                lower.Contains(@"\appdata\roaming\code\cache") ||
+                lower.Contains(@"\appdata\roaming\code\cacheddata") ||
+                lower.Contains(@"\appdata\roaming\code\code cache") ||
+                lower.Contains(@"\appdata\roaming\discord\cache") ||
+                lower.Contains(@"\appdata\roaming\spotify\storage"))
+            {
+                return true;
+            }
+
+            if (lower.Contains(@"\google\chrome\user data\default\cache") ||
                 lower.Contains(@"\microsoft\windows\inetcache") ||
                 lower.Contains(@"\discord\cache") ||
                 lower.Contains(@"\code\cache") ||
                 lower.Contains(@"\code\cacheddata") ||
                 lower.Contains(@"\node_modules") ||
                 lower.Contains(@"\programdata\package cache") ||
-                lower.Contains(@"\microsoft\windows\defender\support") ||
                 lower.Contains(@"\$recycle.bin") ||
                 lower.Contains(@"\system volume information") ||
                 lower.Contains(@"\windows\temp") ||
@@ -104,11 +153,6 @@ namespace xBackup
                 lower.EndsWith("pagefile.sys") ||
                 lower.EndsWith("swapfile.sys") ||
                 lower.EndsWith("hiberfil.sys"))
-            {
-                return true;
-            }
-
-            if (lower.Contains(@"\appdata\local\packages\") && lower.Contains(@"\localcache"))
             {
                 return true;
             }
