@@ -52,6 +52,7 @@ namespace xBackup
 
             // Load saved coordinates from configuration cache if existing
             LoadWindowPlacementSettings();
+            GlobalExclusions.Load();
 
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
@@ -70,6 +71,12 @@ namespace xBackup
                 TxtDestRoot.Text = dialog.FolderName;
                 _destinationRoot = dialog.FolderName;
             }
+        }
+
+        private void BtnConfigureExclusions_Click(object sender, RoutedEventArgs e)
+        {
+            var settingsWin = new SettingsWindow { Owner = this };
+            settingsWin.ShowDialog();
         }
 
         private class WindowPlacementData
@@ -1051,48 +1058,8 @@ for ($i = 0; $i -lt 20; $i++) {{
         {
             string lower = fullPath.ToLower();
 
-            // Explicitly exclude Phone Link, Microsoft Mobile Features, and phone sync files that trigger wireless/bluetooth/cloud sync on demand
-            if (lower.Contains(@"\appdata\local\microsoft\phonelink") ||
-                lower.Contains(@"\microsoft.yourphone") ||
-                lower.Contains(@"\mobiledeviceconnect") ||
-                lower.Contains(@"\.android") ||
-                lower.Contains(@"\phone-link") ||
-                lower.Contains(@"\crossdevice"))
-            {
-                return true;
-            }
-
-            if (lower.Contains(@"\appdata\local\temp") ||
-                lower.Contains(@"\google\chrome\user data\default\cache") ||
-                lower.Contains(@"\microsoft\windows\inetcache") ||
-                lower.Contains(@"\discord\cache") ||
-                lower.Contains(@"\code\cache") ||
-                lower.Contains(@"\code\cacheddata") ||
-                lower.Contains(@"\node_modules") ||
-                lower.Contains(@"\programdata\package cache") ||
-                lower.Contains(@"\microsoft\windows\defender\support") ||
-                lower.Contains(@"\$recycle.bin") ||
-                lower.Contains(@"\system volume information") ||
-                lower.Contains(@"\windows\temp") ||
-                lower.Contains(@"\windows\prefetch") ||
-                lower.Contains(@"\windows\softwaredistribution") ||
-                lower.Contains(@"\windows\installer") ||
-                lower.EndsWith("pagefile.sys") ||
-                lower.EndsWith("swapfile.sys") ||
-                lower.EndsWith("hiberfil.sys"))
-            {
-                return true;
-            }
-
-            if (lower.Contains(@"\appdata\local\packages\") && lower.Contains(@"\localcache"))
-            {
-                return true;
-            }
-
-            if (lower.Contains(@"\bin\") || lower.Contains(@"\obj\") || lower.EndsWith(@"\bin") || lower.EndsWith(@"\obj"))
-            {
-                return true;
-            }
+            if (GlobalExclusions.IsCustomExcluded(lower)) return true;
+            if (GlobalExclusions.IsDefaultExcluded(fullPath)) return true;
 
             return false;
         }
