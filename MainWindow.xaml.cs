@@ -393,6 +393,8 @@ namespace xBackup
 
         public async void ExecuteSilentScheduledBackup()
         {
+            DeleteCheckpoint();
+
             SetUiState(processing: true);
 
             _notifyIcon?.ShowNotification("Midnight Backup Started", "The personal incremental backup session has successfully initialized in the system tray.");
@@ -540,10 +542,9 @@ namespace xBackup
                 {
                     BtnToggleMount.IsEnabled = true;
                     PrgWaiting.Visibility = Visibility.Collapsed;
-                    if (!_isVhdxMountedManual)
-                    {
-                        BtnBackup.IsEnabled = true;
-                    }
+                    // Always re-enable backup button after mount attempt finishes,
+                    // since the engine can auto-mount if needed.
+                    BtnBackup.IsEnabled = true;
                 }
             }
             else
@@ -659,18 +660,21 @@ namespace xBackup
                 {
                     if (cancellationToken.IsCancellationRequested)
                     {
-                        // Save checkpoint before throwing
-                        SaveCheckpoint(new BackupCheckpoint
+                        if (!_isSilentMode)
                         {
-                            Timestamp = DateTime.Now,
-                            FilesToProcess = filesToProcess,
-                            CurrentIndex = i,
-                            DestinationRoot = destRoot,
-                            BackedUpCount = backedUpCount,
-                            UpToDateCount = upToDateCount,
-                            LockedCount = lockedCount,
-                            TotalBytesMirrored = totalBytesMirrored
-                        });
+                            // Save checkpoint before throwing
+                            SaveCheckpoint(new BackupCheckpoint
+                            {
+                                Timestamp = DateTime.Now,
+                                FilesToProcess = filesToProcess,
+                                CurrentIndex = i,
+                                DestinationRoot = destRoot,
+                                BackedUpCount = backedUpCount,
+                                UpToDateCount = upToDateCount,
+                                LockedCount = lockedCount,
+                                TotalBytesMirrored = totalBytesMirrored
+                            });
+                        }
                         cancellationToken.ThrowIfCancellationRequested();
                     }
 
