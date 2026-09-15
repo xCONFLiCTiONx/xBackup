@@ -7,7 +7,41 @@ namespace xBackup
 {
     public static class GlobalExclusions
     {
+        private static readonly object _lock = new object();
         public static HashSet<string> CustomExcludedPaths { get; } = new HashSet<string>();
+
+        // Pre-optimized sets for fast lookup
+        private static readonly HashSet<string> _excludedFolderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "node_modules", ".vs", ".idea", "target", "bin", "obj", "build", "$recycle.bin",
+            "system volume information", "prefetch", "softwaredistribution", "installer",
+            "inetcache", "webcache", "dxcache", "d3dscache", "crashrpt", "_cache", "cache",
+            "cacheddata", "code cache", "gpucache", "assetcache"
+        };
+
+        private static readonly string[] _excludedPathSegments = new[]
+        {
+            @"\appdata\locallow",
+            @"\appdata\local\packages",
+            @"\programdata\packages",
+            @"\programdata\microsoft\windows defender",
+            @"\programdata\microsoft\crypto",
+            @"\application data",
+            @"\appdata\local\google\androidstudio",
+            @"\appdata\local\temp",
+            @"\appdata\local\microsoft\edge\user data",
+            @"\google\chrome\user data\default\cache",
+            @"\mozilla\firefox\profiles\",
+            @"\appdata\roaming\discord\cache",
+            @"\appdata\roaming\spotify\storage",
+            @"\microsoft\windows\inetcache",
+            @"\programdata\package cache",
+            @"\windows\temp",
+            @"\microsoft.yourphone",
+            @"\mobiledeviceconnect",
+            @"\phone-link",
+            @"\crossdevice"
+        };
 
         private static string GetConfigFilePath()
         {
@@ -19,147 +53,93 @@ namespace xBackup
 
         public static void Load()
         {
-            try
+            lock (_lock)
             {
-                string path = GetConfigFilePath();
-                if (File.Exists(path))
+                try
                 {
-                    string json = File.ReadAllText(path);
-                    var list = JsonSerializer.Deserialize<List<string>>(json);
-                    CustomExcludedPaths.Clear();
-                    if (list != null)
+                    string path = GetConfigFilePath();
+                    if (File.Exists(path))
                     {
-                        foreach (var item in list)
+                        string json = File.ReadAllText(path);
+                        var list = JsonSerializer.Deserialize<List<string>>(json);
+                        CustomExcludedPaths.Clear();
+                        if (list != null)
                         {
-                            if (!string.IsNullOrWhiteSpace(item))
+                            foreach (var item in list)
                             {
-                                CustomExcludedPaths.Add(item.Trim().ToLower());
+                                if (!string.IsNullOrWhiteSpace(item))
+                                {
+                                    CustomExcludedPaths.Add(item.Trim().ToLowerInvariant().Replace('/', '\\'));
+                                }
                             }
                         }
                     }
                 }
+                catch { }
             }
-            catch { }
         }
 
         public static void Save()
         {
-            try
+            lock (_lock)
             {
-                string path = GetConfigFilePath();
-                var list = new List<string>(CustomExcludedPaths);
-                string json = JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(path, json);
+                try
+                {
+                    string path = GetConfigFilePath();
+                    var list = new List<string>(CustomExcludedPaths);
+                    string json = JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(path, json);
+                }
+                catch { }
             }
-            catch { }
         }
 
         public static bool IsCustomExcluded(string lowerPath)
         {
-            if (CustomExcludedPaths.Contains(lowerPath)) return true;
+            if (string.IsNullOrEmpty(lowerPath)) return false;
+            string normalized = lowerPath.ToLowerInvariant().Replace('/', '\\');
 
-            try
+            lock (_lock)
             {
-                string? parent = Path.GetDirectoryName(lowerPath);
-                while (!string.IsNullOrEmpty(parent))
+                if (CustomExcludedPaths.Contains(normalized)) return true;
+
+                try
                 {
-                    if (CustomExcludedPaths.Contains(parent.ToLower())) return true;
-                    parent = Path.GetDirectoryName(parent);
+                    string? parent = Path.GetDirectoryName(normalized);
+                    while (!string.IsNullOrEmpty(parent))
+                    {
+                        if (CustomExcludedPaths.Contains(parent)) return true;
+                        parent = Path.GetDirectoryName(parent);
+                    }
                 }
+                catch { }
             }
-            catch { }
 
             return false;
         }
 
         public static bool IsDefaultExcluded(string fullPath)
         {
-            string lower = fullPath.ToLower();
+            if (string.IsNullOrEmpty(fullPath)) return false;
+            string lower = fullPath.ToLowerInvariant().Replace('/', '\\');
 
-            // Explicitly exclude Phone Link, Microsoft Mobile Features, and phone sync files that trigger wireless/bluetooth/cloud sync on demand
-            if (lower.Contains(@"\appdata\local\microsoft\phonelink") ||
-                lower.Contains(@"\microsoft.yourphone") ||
-                lower.Contains(@"\mobiledeviceconnect") ||
-                lower.Contains(@"\phone-link") ||
-                lower.Contains(@"\crossdevice"))
-            {
+            // 1. Check for specific system files at the end of the path
+            if (lower.EndsWith("pagefile.sys") || lower.EndsWith("swapfile.sys") || lower.EndsWith("hiberfil.sys"))
                 return true;
+
+            // 2. Fast check for common excluded directory names in the path segments
+            string[] segments = lower.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            foreach (var segment in segments)
+            {
+                if (_excludedFolderNames.Contains(segment))
+                    return true;
             }
 
-            // User requested specific exclusions
-            if (lower.Contains(@"\appdata\locallow") ||
-                lower.Contains(@"\appdata\local\packages") ||
-                lower.Contains(@"\programdata\packages") ||
-                lower.Contains(@"\programdata\microsoft\windows defender") ||
-                lower.Contains(@"\programdata\microsoft\crypto") ||
-                lower.Contains(@"\application data") ||
-                lower.Contains(@"\history") ||
-                lower.Contains(@"\cookies") ||
-                lower.Contains(@"\local settings") ||
-                lower.Contains(@"\nethood") ||
-                lower.Contains(@"\printhood") ||
-                lower.Contains(@"\recent") ||
-                lower.Contains(@"\sendto") ||
-                lower.Contains(@"\start menu") ||
-                lower.Contains(@"\templates") ||
-                lower.Contains(@"\appdata\local\google\androidstudio") ||
-                lower.Contains(@"\appdata\local\temp") ||
-                lower.Contains(@"\appdata\local\microsoft\windows\inetcache") ||
-                lower.Contains(@"\appdata\local\microsoft\edge\user data") ||
-                lower.Contains(@"\appdata\local\nvidia\dxcache") ||
-                lower.Contains(@"\appdata\local\nvidia\d3dscache") ||
-                lower.Contains(@"\appdata\local\crashrpt") ||
-                lower.Contains(@"\._cache") ||
-                lower.Contains(@"\._javacpp") ||
-                lower.Contains(@"\._jbr") ||
-                lower.Contains(@"\._templateengine") ||
-                lower.Contains(@"\.android\cache") ||
-                lower.Contains(@"\.android\cli") ||
-                lower.Contains(@"\.android\avd\") ||
-                lower.Contains(@"\.android\studio\agent\conversations") ||
-                lower.Contains(@"\google\chrome\user data\default\cache") ||
-                lower.Contains(@"\google\chrome\user data\default\code cache") ||
-                lower.Contains(@"\google\chrome\user data\default\gpucache") ||
-                lower.Contains(@"\google\chrome\user data\default\service worker\cachestorage") ||
-                lower.Contains(@"\appdata\local\microsoft\windows\webcache") ||
-                lower.Contains(@"\appdata\local\microsoft\windows\explorer\thumbcachetodelete") ||
-                lower.Contains(@"\appdata\local\microsoft\edge\user data\default\cache") ||
-                lower.Contains(@"\appdata\local\microsoft\edge\user data\default\code cache") ||
-                lower.Contains(@"\appdata\local\microsoft\edge\user data\default\gpucache") ||
-                lower.Contains(@"\mozilla\firefox\profiles\") ||
-                lower.Contains(@"\assetcache") ||
-                lower.Contains(@"\appdata\roaming\code\cache") ||
-                lower.Contains(@"\appdata\roaming\code\cacheddata") ||
-                lower.Contains(@"\appdata\roaming\code\code cache") ||
-                lower.Contains(@"\appdata\roaming\discord\cache") ||
-                lower.Contains(@"\appdata\roaming\spotify\storage"))
+            // 3. Check for specific path patterns (prefixes/substrings)
+            foreach (var pattern in _excludedPathSegments)
             {
-                return true;
-            }
-
-            if (lower.Contains(@"\google\chrome\user data\default\cache") ||
-                lower.Contains(@"\microsoft\windows\inetcache") ||
-                lower.Contains(@"\discord\cache") ||
-                lower.Contains(@"\code\cache") ||
-                lower.Contains(@"\code\cacheddata") ||
-                lower.Contains(@"\node_modules") ||
-                lower.Contains(@"\programdata\package cache") ||
-                lower.Contains(@"\$recycle.bin") ||
-                lower.Contains(@"\system volume information") ||
-                lower.Contains(@"\windows\temp") ||
-                lower.Contains(@"\windows\prefetch") ||
-                lower.Contains(@"\windows\softwaredistribution") ||
-                lower.Contains(@"\windows\installer") ||
-                lower.EndsWith("pagefile.sys") ||
-                lower.EndsWith("swapfile.sys") ||
-                lower.EndsWith("hiberfil.sys"))
-            {
-                return true;
-            }
-
-            if (lower.Contains(@"\bin\") || lower.Contains(@"\obj\") || lower.EndsWith(@"\bin") || lower.EndsWith(@"\obj"))
-            {
-                return true;
+                if (lower.Contains(pattern))
+                    return true;
             }
 
             return false;

@@ -31,6 +31,18 @@ namespace xBackup
         private readonly List<string> _errorDetailsReport = new List<string>();
         private System.Threading.CancellationTokenSource? _cts;
 
+        public class BackupCheckpoint
+        {
+            public DateTime Timestamp { get; set; }
+            public List<string> FilesToProcess { get; set; } = new List<string>();
+            public int CurrentIndex { get; set; }
+            public string DestinationRoot { get; set; } = string.Empty;
+            public long BackedUpCount { get; set; }
+            public long UpToDateCount { get; set; }
+            public long LockedCount { get; set; }
+            public long TotalBytesMirrored { get; set; }
+        }
+
         public class RelayCommand : System.Windows.Input.ICommand
         {
             private readonly Action _execute;
@@ -94,6 +106,55 @@ namespace xBackup
             string folder = Path.Combine(appData, "SmartBackupEngine");
             if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
             return Path.Combine(folder, "window_placement.json");
+        }
+
+        private string GetCheckpointFilePath()
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string folder = Path.Combine(appData, "SmartBackupEngine");
+            if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
+            return Path.Combine(folder, "backup_checkpoint.json");
+        }
+
+        private void SaveCheckpoint(BackupCheckpoint checkpoint)
+        {
+            try
+            {
+                string path = GetCheckpointFilePath();
+                string json = JsonSerializer.Serialize(checkpoint);
+                File.WriteAllText(path, json);
+            }
+            catch { }
+        }
+
+        private BackupCheckpoint? LoadCheckpoint()
+        {
+            try
+            {
+                string path = GetCheckpointFilePath();
+                if (File.Exists(path))
+                {
+                    string json = File.ReadAllText(path);
+                    var checkpoint = JsonSerializer.Deserialize<BackupCheckpoint>(json);
+                    // Only return if it's less than 48 hours old
+                    if (checkpoint != null && (DateTime.Now - checkpoint.Timestamp).TotalHours < 48)
+                    {
+                        return checkpoint;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private void DeleteCheckpoint()
+        {
+            try
+            {
+                string path = GetCheckpointFilePath();
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch { }
         }
 
         private void LoadWindowPlacementSettings()
@@ -183,6 +244,24 @@ namespace xBackup
             {
                 MessageBox.Show($"SCHEDULER STATUS UTILITY CRASH: {taskEx.Message}", "Scheduler Check Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+
+            // Detect if VHDX is already mounted at startup
+            string initialVhdxPath = Path.Combine(TxtDestRoot.Text, "BackupDev.vhdx");
+            Task.Run(() =>
+            {
+                string status = CheckVhdxMountStatus(initialVhdxPath);
+                if (status != "NotMounted")
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        _isVhdxMountedManual = true;
+                        BtnToggleMount.Content = "Eject Drive";
+                        BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(180, 50, 50));
+                        string driveLetter = status == "Mounted" ? "" : status;
+                        AppendLog($"Detected existing VHDX mount {(string.IsNullOrEmpty(driveLetter) ? "" : "at drive " + driveLetter)}", Brushes.LightGreen);
+                    });
+                }
+            });
         }
 
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -348,15 +427,37 @@ namespace xBackup
             // Sync from GUI configurations dynamically
             _destinationRoot = TxtDestRoot.Text;
 
+            BackupCheckpoint? checkpoint = LoadCheckpoint();
+            bool resume = false;
+            if (checkpoint != null && checkpoint.DestinationRoot == _destinationRoot)
+            {
+                var result = MessageBox.Show(
+                    $"An interrupted backup from {checkpoint.Timestamp:g} was found.\nWould you like to resume from file {checkpoint.CurrentIndex:N0} of {checkpoint.FilesToProcess.Count:N0}?",
+                    "Resume Backup?",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question
+                );
+                resume = result == MessageBoxResult.Yes;
+            }
+
+            if (!resume)
+            {
+                DeleteCheckpoint();
+                checkpoint = null;
+            }
+
             SetUiState(processing: true);
-            RtbLog.Document.Blocks.Clear();
-            PrgBar.Value = 0;
+            if (!resume)
+            {
+                RtbLog.Document.Blocks.Clear();
+                PrgBar.Value = 0;
+            }
 
             _cts = new System.Threading.CancellationTokenSource();
 
             try
             {
-                await Task.Run(() => RunBackupEngine(_destinationRoot, _cts.Token));
+                await Task.Run(() => RunBackupEngine(_destinationRoot, _cts.Token, checkpoint));
             }
             catch (OperationCanceledException)
             {
@@ -405,15 +506,30 @@ namespace xBackup
                         AppendLog("VHDX container created and formatted successfully as ReFS Dev Drive.", Brushes.LightGreen);
                     }
 
-                    AppendLog("Mounting VHDX backup drive...", Brushes.DeepSkyBlue);
-                    string driveLetter = await Task.Run(() => MountVhdxAndGetLetter(vhdxPath));
-                    AppendLog($"VHDX successfully mounted at drive {driveLetter}", Brushes.LightGreen);
+                    AppendLog("Checking if VHDX is already mounted...", Brushes.DeepSkyBlue);
+                    string status = await Task.Run(() => CheckVhdxMountStatus(vhdxPath));
+                    string driveLetter = "";
+
+                    if (status != "NotMounted")
+                    {
+                        driveLetter = status == "Mounted" ? "" : status;
+                        AppendLog($"VHDX is already mounted {(string.IsNullOrEmpty(driveLetter) ? "" : "at drive " + driveLetter)}", Brushes.LightGreen);
+                    }
+                    else
+                    {
+                        AppendLog("Mounting VHDX backup drive...", Brushes.DeepSkyBlue);
+                        driveLetter = await Task.Run(() => MountVhdxAndGetLetter(vhdxPath));
+                        AppendLog($"VHDX successfully mounted at drive {driveLetter}", Brushes.LightGreen);
+                    }
 
                     _isVhdxMountedManual = true;
                     BtnToggleMount.Content = "Eject Drive";
                     BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(180, 50, 50));
 
-                    Process.Start("explorer.exe", driveLetter);
+                    if (!string.IsNullOrEmpty(driveLetter))
+                    {
+                        Process.Start("explorer.exe", driveLetter);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -461,14 +577,14 @@ namespace xBackup
         private void SetUiState(bool processing)
         {
             _isProcessing = processing;
-            BtnBackup.IsEnabled = !processing && !_isVhdxMountedManual;
+            BtnBackup.IsEnabled = !processing;
             BtnToggleMount.IsEnabled = !processing;
             BtnStop.IsEnabled = processing;
             TxtStatus.Text = processing ? "Engine Status: Active" : "Engine Status: Ready";
             TxtStatus.Foreground = processing ? new SolidColorBrush(Color.FromRgb(220, 202, 170)) : new SolidColorBrush(Color.FromRgb(78, 201, 176));
         }
 
-        private void RunBackupEngine(string destRoot, System.Threading.CancellationToken cancellationToken)
+        private void RunBackupEngine(string destRoot, System.Threading.CancellationToken cancellationToken, BackupCheckpoint? checkpoint = null)
         {
             string vhdxPath = Path.Combine(destRoot, "BackupDev.vhdx");
             string mountedDrive = string.Empty;
@@ -477,7 +593,7 @@ namespace xBackup
             try
             {
                 SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
-                AppendLog("Initializing Automated Backup Lifecycle...", Brushes.DeepSkyBlue);
+                AppendLog(checkpoint == null ? "Initializing Automated Backup Lifecycle..." : "Resuming Backup Lifecycle...", Brushes.DeepSkyBlue);
 
                 if (!Directory.Exists(destRoot))
                 {
@@ -501,23 +617,30 @@ namespace xBackup
 
                 _errorDetailsReport.Clear();
 
-                AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
-                List<string> filesToProcess = new List<string>();
+                List<string> filesToProcess;
                 long totalScannedCount = 0;
 
-                foreach (var sourceRoot in _sourcePaths)
+                if (checkpoint != null)
                 {
-                    if (!Directory.Exists(sourceRoot))
-                    {
-                        AppendLog($"Source directory absent, skipping scope: {sourceRoot}", Brushes.Yellow);
-                        continue;
-                    }
-
-                    AppendLog($"Scanning scope: {sourceRoot}...", Brushes.Gray);
-                    DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount, cancellationToken);
+                    filesToProcess = checkpoint.FilesToProcess;
+                    AppendLog($"Resuming discovery: {filesToProcess.Count:N0} files loaded from checkpoint.", Brushes.LightGreen);
                 }
-
-                AppendLog($"Discovery finished. Total files matched on drive: {filesToProcess.Count} (Filtered out {totalScannedCount - filesToProcess.Count} junk/temp files).", Brushes.LightGreen);
+                else
+                {
+                    AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
+                    filesToProcess = new List<string>();
+                    foreach (var sourceRoot in _sourcePaths)
+                    {
+                        if (!Directory.Exists(sourceRoot))
+                        {
+                            AppendLog($"Source directory absent, skipping scope: {sourceRoot}", Brushes.Yellow);
+                            continue;
+                        }
+                        AppendLog($"Scanning scope: {sourceRoot}...", Brushes.Gray);
+                        DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount, cancellationToken);
+                    }
+                    AppendLog($"Discovery finished. Total files matched on drive: {filesToProcess.Count} (Filtered out {totalScannedCount - filesToProcess.Count} junk/temp files).", Brushes.LightGreen);
+                }
 
                 Dispatcher.Invoke(() =>
                 {
@@ -525,17 +648,34 @@ namespace xBackup
                     PrgBar.Maximum = filesToProcess.Count;
                 });
 
-                long backedUpCount = 0;
-                long upToDateCount = 0;
-                long lockedCount = 0;
-                long totalBytesMirrored = 0;
+                long backedUpCount = checkpoint?.BackedUpCount ?? 0;
+                long upToDateCount = checkpoint?.UpToDateCount ?? 0;
+                long lockedCount = checkpoint?.LockedCount ?? 0;
+                long totalBytesMirrored = checkpoint?.TotalBytesMirrored ?? 0;
 
-                int currentIndex = 0;
+                int startIndex = checkpoint?.CurrentIndex ?? 0;
 
-                foreach (var file in filesToProcess)
+                for (int i = startIndex; i < filesToProcess.Count; i++)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    currentIndex++;
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        // Save checkpoint before throwing
+                        SaveCheckpoint(new BackupCheckpoint
+                        {
+                            Timestamp = DateTime.Now,
+                            FilesToProcess = filesToProcess,
+                            CurrentIndex = i,
+                            DestinationRoot = destRoot,
+                            BackedUpCount = backedUpCount,
+                            UpToDateCount = upToDateCount,
+                            LockedCount = lockedCount,
+                            TotalBytesMirrored = totalBytesMirrored
+                        });
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
+                    var file = filesToProcess[i];
+                    int currentIndex = i + 1;
 
                     // Always show the current file in the status text so user knows exactly what the engine is working on
                     Dispatcher.Invoke(() =>
@@ -593,8 +733,6 @@ namespace xBackup
                     string tempFilePath = destFilePath + ".tmp";
                     try
                     {
-                        AppendLog($"[Copying] {sourceFi.Name} ({FormatBytes(sourceFi.Length)})...", Brushes.Gray);
-
                         string? parentDir = Path.GetDirectoryName(destFilePath);
                         if (parentDir != null && !Directory.Exists(parentDir))
                         {
@@ -642,6 +780,9 @@ namespace xBackup
                         }
                     }
                 }
+
+                // If we finished successfully, delete the checkpoint
+                DeleteCheckpoint();
 
                 // --- Purge Phase (File Deletions) ---
                 long purgedFilesCount = 0;
@@ -888,6 +1029,43 @@ exit";
                     string error = process.StandardError.ReadToEnd();
                     throw new Exception($"Utility {fileName} failed with exit code {process.ExitCode}. Error: {error}");
                 }
+            }
+        }
+
+        private string CheckVhdxMountStatus(string vhdxPath)
+        {
+            try
+            {
+                string script = $@"
+$path = '{vhdxPath.Replace("'", "''")}';
+if (Test-Path $path) {{
+    $di = Get-DiskImage -ImagePath $path -ErrorAction SilentlyContinue 2>$null;
+    if ($di -and $di.Number -ne $null) {{
+        $part = Get-Partition -DiskNumber $di.Number -ErrorAction SilentlyContinue 2>$null | Where-Object {{ $_.DriveLetter }};
+        if ($part) {{
+            Write-Output $part.DriveLetter;
+            return;
+        }}
+        Write-Output 'Mounted';
+        return;
+    }}
+}}
+Write-Output 'NotMounted';";
+
+                string output = RunPowerShell(script).Trim();
+                if (output == "Mounted" || output == "NotMounted")
+                {
+                    return output;
+                }
+                if (!string.IsNullOrEmpty(output) && char.IsLetter(output[0]))
+                {
+                    return output[0] + ":";
+                }
+                return "NotMounted";
+            }
+            catch
+            {
+                return "NotMounted";
             }
         }
 
