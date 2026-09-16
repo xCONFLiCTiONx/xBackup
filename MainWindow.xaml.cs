@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -9,6 +10,7 @@ using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Media;
 using Microsoft.Win32;
+using xBackup.Models;
 
 namespace xBackup
 {
@@ -696,6 +698,34 @@ namespace xBackup
             if (snapshotDialog.ShowDialog() != true) return;
             string snapshotPath = snapshotDialog.FolderName;
 
+            // Differentiate between Legacy and Catalog
+            string folderName = Path.GetFileName(snapshotPath);
+            bool isCatalogSnapshot = false;
+            int snapshotId = -1;
+
+            string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
+            if (File.Exists(dbPath))
+            {
+                using var catalog = new BackupCatalog(dbPath);
+                var snap = catalog.GetSnapshotByFolderName(folderName);
+                if (snap != null)
+                {
+                    isCatalogSnapshot = true;
+                    snapshotId = snap.Id;
+                }
+            }
+
+            if (!isCatalogSnapshot)
+            {
+                var result = MessageBox.Show(
+                    "Selected folder is not recognized in the backup catalog. It may be a legacy backup.\n\nProceed with legacy (full-folder) restore?",
+                    "Legacy Backup Detected",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning
+                );
+                if (result != MessageBoxResult.Yes) return;
+            }
+
             var targetDialog = new Microsoft.Win32.OpenFolderDialog
             {
                 Title = "Select Destination Folder to Restore TO"
@@ -714,7 +744,14 @@ namespace xBackup
 
             try
             {
-                await Task.Run(() => RunRestoreEngine(snapshotPath, targetPath, overwrite, _cts.Token));
+                if (isCatalogSnapshot)
+                {
+                    await Task.Run(() => RunCatalogRestoreEngine(mountedDrive, snapshotId, targetPath, overwrite, _cts.Token));
+                }
+                else
+                {
+                    await Task.Run(() => RunLegacyRestoreEngine(snapshotPath, targetPath, overwrite, _cts.Token));
+                }
             }
             catch (OperationCanceledException)
             {
@@ -728,7 +765,45 @@ namespace xBackup
             }
         }
 
-        private void RunRestoreEngine(string snapshotPath, string targetPath, bool overwrite, System.Threading.CancellationToken cancellationToken)
+        private void RunCatalogRestoreEngine(string mountedDrive, int snapshotId, string targetPath, bool overwrite, System.Threading.CancellationToken cancellationToken)
+        {
+            try
+            {
+                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+                AppendLog($"Initializing Catalog Restore Lifecycle (Snapshot ID: {snapshotId})...", Brushes.DeepSkyBlue);
+
+                string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
+                using var catalog = new BackupCatalog(dbPath);
+                var engine = new RestoreEngine(catalog, mountedDrive);
+
+                engine.RestoreSnapshot(snapshotId, targetPath, overwrite, cancellationToken, (file, current, total) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        TxtProgressDetails.Text = $"[{current:N0}/{total:N0}] Restoring: {Path.GetFileName(file)}";
+                        if (current % 100 == 0 || current == total)
+                        {
+                            PrgBar.Maximum = total;
+                            PrgBar.Value = current;
+                            LblScanned.Text = total.ToString("N0");
+                            LblBackedUp.Text = current.ToString("N0");
+                        }
+                    });
+                });
+
+                AppendLog("Catalog restore successfully completed.", Brushes.LightGreen);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Restore engine failure: {ex.Message}", Brushes.Red);
+            }
+            finally
+            {
+                SetThreadExecutionState(ES_CONTINUOUS);
+            }
+        }
+
+        private void RunLegacyRestoreEngine(string snapshotPath, string targetPath, bool overwrite, System.Threading.CancellationToken cancellationToken)
         {
             List<string> filesToRestore = new List<string>();
             long restoredCount = 0;
@@ -739,12 +814,12 @@ namespace xBackup
             try
             {
                 SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
-                AppendLog("Initializing Restore Lifecycle...", Brushes.DeepSkyBlue);
+                AppendLog("Initializing Legacy Restore Lifecycle...", Brushes.DeepSkyBlue);
 
                 _errorDetailsReport.Clear();
                 long totalScannedCount = 0;
 
-                AppendLog("Scanning snapshot contents...", Brushes.DeepSkyBlue);
+                AppendLog("Scanning legacy snapshot contents...", Brushes.DeepSkyBlue);
                 DiscoverFilesForRestore(snapshotPath, filesToRestore, ref totalScannedCount, cancellationToken);
 
                 Dispatcher.Invoke(() =>
@@ -926,12 +1001,11 @@ namespace xBackup
             long lockedCount = checkpoint?.LockedCount ?? 0;
             long totalBytesMirrored = checkpoint?.TotalBytesMirrored ?? 0;
             long purgedFilesCount = 0;
-            long purgedDirsCount = 0;
 
             try
             {
                 SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
-                AppendLog(checkpoint == null ? "Initializing Automated Backup Lifecycle..." : "Resuming Backup Lifecycle...", Brushes.DeepSkyBlue);
+                AppendLog(checkpoint == null ? "Initializing Automated Snapshot Lifecycle..." : "Resuming Snapshot Lifecycle...", Brushes.DeepSkyBlue);
 
                 if (!Directory.Exists(destRoot))
                 {
@@ -941,7 +1015,7 @@ namespace xBackup
                 if (!File.Exists(vhdxPath))
                 {
                     Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Visible);
-                    AppendLog("VHDX storage container absent. Building 100 GB dynamic image with ReFS Dev Drive layout...", Brushes.Orange);
+                    AppendLog("VHDX storage container absent. Building 100 GB dynamic image...", Brushes.Orange);
                     EnsureVhdxExists(vhdxPath);
                     AppendLog("VHDX container created and initialized cleanly.", Brushes.LightGreen);
                 }
@@ -953,45 +1027,21 @@ namespace xBackup
                 AppendLog($"VHDX dynamically attached onto drive {mountedDrive}", Brushes.LightGreen);
                 Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Collapsed);
 
+                // Initialize Catalog
+                string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
+                using var catalog = new BackupCatalog(dbPath);
+                catalog.MarkAbandonedSnapshotsFailed();
+
                 // --- Establish Snapshot Target Architecture ---
-                string todayString = DateTime.Today.ToString("yyyy-MM-dd");
-                string activeSnapshotDir = string.Empty;
-                string? baselineSnapshotDir = null;
+                string nowString = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+                string snapshotFolderName = $"Snapshot_{nowString}";
+                string activeSnapshotDir = Path.Combine(mountedDrive, snapshotFolderName);
 
-                // Look for existing snapshot folder matches on the mounted drive to resolve base history
-                var existingSnapshots = new List<string>();
-                try
-                {
-                    foreach (var d in Directory.GetDirectories(mountedDrive, "Snapshot_*"))
-                    {
-                        existingSnapshots.Add(d);
-                    }
-                    existingSnapshots.Sort(); // Sequential dates ordering
-                }
-                catch { }
-
-                // Check if we have an active folder matching today or if we need a new day folder setup
-                string matchedTodayDir = existingSnapshots.Find(x => Path.GetFileName(x).Equals("Snapshot_" + todayString, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrEmpty(matchedTodayDir))
-                {
-                    activeSnapshotDir = matchedTodayDir;
-                    AppendLog($"Resuming incremental updates inside today's active folder bucket: {Path.GetFileName(activeSnapshotDir)}", Brushes.LightGreen);
-                }
-                else
-                {
-                    if (existingSnapshots.Count > 0)
-                    {
-                        baselineSnapshotDir = existingSnapshots[existingSnapshots.Count - 1];
-                    }
-
-                    string newDirName = $"Snapshot_{todayString}";
-                    activeSnapshotDir = Path.Combine(mountedDrive, newDirName);
-                    Directory.CreateDirectory(activeSnapshotDir);
-                    AppendLog($"Created high-integrity daily snapshot target folder: {newDirName}", Brushes.DeepSkyBlue);
-                }
+                var snapshot = catalog.CreateSnapshot(DateTime.Now);
+                Directory.CreateDirectory(activeSnapshotDir);
+                AppendLog($"Created unique daily snapshot target folder: {snapshotFolderName}", Brushes.DeepSkyBlue);
 
                 _errorDetailsReport.Clear();
-
                 long totalScannedCount = 0;
 
                 if (checkpoint != null)
@@ -1002,7 +1052,6 @@ namespace xBackup
                 else
                 {
                     AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
-
                     var sourcePaths = new List<string>(GlobalExclusions.SelectedDrives);
 
                     foreach (var sourceRoot in sourcePaths)
@@ -1015,7 +1064,7 @@ namespace xBackup
                         AppendLog($"Scanning scope: {sourceRoot}...", Brushes.Gray);
                         DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount, cancellationToken);
                     }
-                    AppendLog($"Discovery finished. Total files matched on drive: {filesToProcess.Count} (Filtered out {totalScannedCount - filesToProcess.Count} junk/temp files).", Brushes.LightGreen);
+                    AppendLog($"Discovery finished. Total files matched: {filesToProcess.Count}.", Brushes.LightGreen);
                 }
 
                 Dispatcher.Invoke(() =>
@@ -1025,6 +1074,7 @@ namespace xBackup
                 });
 
                 int startIndex = checkpoint?.CurrentIndex ?? 0;
+                var seenFilesIds = new HashSet<int>();
 
                 for (int i = startIndex; i < filesToProcess.Count; i++)
                 {
@@ -1032,7 +1082,6 @@ namespace xBackup
                     {
                         if (!_isSilentMode)
                         {
-                            // Save checkpoint before throwing
                             SaveCheckpoint(new BackupCheckpoint
                             {
                                 Timestamp = DateTime.Now,
@@ -1051,11 +1100,9 @@ namespace xBackup
                     var file = filesToProcess[i];
                     int currentIndex = i + 1;
 
-                    // Always show the current file in the status text so user knows exactly what the engine is working on
                     Dispatcher.Invoke(() =>
                     {
-                        TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToProcess.Count:N0}] Processing: {file}";
-
+                        TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToProcess.Count:N0}] Checking: {Path.GetFileName(file)}";
                         if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
                         {
                             PrgBar.Value = currentIndex;
@@ -1078,48 +1125,23 @@ namespace xBackup
                         continue;
                     }
 
-                    string relativeStructurePath = MapToBackupPath(file);
-                    string destFilePath = Path.Combine(activeSnapshotDir, relativeStructurePath);
+                    var catalogFile = catalog.GetOrCreateFile(file);
+                    seenFilesIds.Add(catalogFile.Id);
+                    var latestVersion = catalog.GetLatestVersion(catalogFile.Id);
 
                     bool needsCopy = true;
-                    try
-                    {
-                        if (File.Exists(destFilePath))
-                        {
-                            var destFi = new FileInfo(destFilePath);
-                            if (destFi.Length == sourceFi.Length && destFi.LastWriteTimeUtc == sourceFi.LastWriteTimeUtc)
-                            {
-                                needsCopy = false;
-                            }
-                        }
-                        else if (baselineSnapshotDir != null)
-                        {
-                            // Check if file exists identical in prior base snapshot folder to make a zero-byte hardlink pointer reference
-                            string baselineFilePath = Path.Combine(baselineSnapshotDir, relativeStructurePath);
-                            if (File.Exists(baselineFilePath))
-                            {
-                                var baseFi = new FileInfo(baselineFilePath);
-                                if (baseFi.Length == sourceFi.Length && baseFi.LastWriteTimeUtc == sourceFi.LastWriteTimeUtc)
-                                {
-                                    string? parentDir = Path.GetDirectoryName(destFilePath);
-                                    if (parentDir != null && !Directory.Exists(parentDir))
-                                    {
-                                        Directory.CreateDirectory(parentDir);
-                                    }
+                    ChangeType changeType = ChangeType.New;
 
-                                    if (CreateHardLink(destFilePath, baselineFilePath, IntPtr.Zero))
-                                    {
-                                        needsCopy = false;
-                                        upToDateCount++;
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    catch
+                    if (latestVersion != null && latestVersion.ChangeType != ChangeType.Deleted)
                     {
-                        needsCopy = true;
+                        if (latestVersion.Size == sourceFi.Length && latestVersion.LastWriteUtc == sourceFi.LastWriteTimeUtc)
+                        {
+                            needsCopy = false;
+                        }
+                        else
+                        {
+                            changeType = ChangeType.Modified;
+                        }
                     }
 
                     if (!needsCopy)
@@ -1128,7 +1150,10 @@ namespace xBackup
                         continue;
                     }
 
+                    string relativeStructurePath = MapToBackupPath(file);
+                    string destFilePath = Path.Combine(activeSnapshotDir, relativeStructurePath);
                     string tempFilePath = destFilePath + ".tmp";
+
                     try
                     {
                         string? parentDir = Path.GetDirectoryName(destFilePath);
@@ -1137,120 +1162,102 @@ namespace xBackup
                             Directory.CreateDirectory(parentDir);
                         }
 
-                        // Copy to a temporary file first to protect against partial copies/power outages
                         File.Copy(file, tempFilePath, overwrite: true);
-
-                        // Verify that the temporary file was written completely and correctly
                         var tempFi = new FileInfo(tempFilePath);
                         if (!tempFi.Exists || tempFi.Length != sourceFi.Length)
                         {
                             throw new IOException("Verification failed: Copied file size does not match source file size.");
                         }
 
-                        // Atomically replace/move to the final destination path
                         File.Move(tempFilePath, destFilePath, overwrite: true);
                         File.SetLastWriteTimeUtc(destFilePath, sourceFi.LastWriteTimeUtc);
 
+                        // Record in catalog
+                        catalog.AddFileVersion(new FileVersion
+                        {
+                            FileId = catalogFile.Id,
+                            SnapshotId = snapshot.Id,
+                            BackupPath = Path.Combine(snapshotFolderName, relativeStructurePath),
+                            Size = sourceFi.Length,
+                            LastWriteUtc = sourceFi.LastWriteTimeUtc,
+                            ChangeType = changeType
+                        });
+
                         totalBytesMirrored += sourceFi.Length;
                         backedUpCount++;
-
-                        if (backedUpCount <= 100 || sourceFi.Length > 50 * 1024 * 1024)
-                        {
-                            AppendLog($"[Snapshot] Streamed & Linked: {sourceFi.Name} ({FormatBytes(sourceFi.Length)})", Brushes.LightGreen);
-                        }
                     }
                     catch (Exception ex)
                     {
-                        try
-                        {
-                            if (File.Exists(tempFilePath))
-                            {
-                                File.Delete(tempFilePath);
-                            }
-                        }
-                        catch { /* Ignore cleanup errors to retain original exception context */ }
-
+                        try { if (File.Exists(tempFilePath)) File.Delete(tempFilePath); } catch { }
                         lockedCount++;
                         _errorDetailsReport.Add($"-> {file} | Reason: {ex.Message}");
-                        if (lockedCount <= 50)
-                        {
-                            AppendLog($"Bypassed locked file: {sourceFi.Name} ({ex.Message})", Brushes.Yellow);
-                        }
                     }
                 }
 
-                // If we finished successfully, delete the checkpoint
                 DeleteCheckpoint();
 
-                // --- Purge Phase (File Deletions inside Today's Active Snapshot Bucket) ---
-                try
+                // --- Deletion Tracking Phase ---
+                AppendLog("Commencing scope-aware deletion tracking phase...", Brushes.DeepSkyBlue);
+                var allFiles = catalog.GetAllFiles();
+                foreach (var f in allFiles)
                 {
-                    AppendLog("Commencing deletion/purge phase for removed files...", Brushes.DeepSkyBlue);
-                    var sourcePaths = new List<string>(GlobalExclusions.SelectedDrives);
-                    foreach (var sourceRoot in sourcePaths)
+                    if (!seenFilesIds.Contains(f.Id))
                     {
-                        string driveFolder = MapToBackupPath(sourceRoot);
-                        string destRootFolder = Path.Combine(activeSnapshotDir, driveFolder);
-
-                        if (Directory.Exists(destRootFolder))
+                        // Check if this file IS in current scope (drives) and NOT excluded
+                        bool inScope = GlobalExclusions.SelectedDrives.Any(d => f.SourcePath.StartsWith(d, StringComparison.OrdinalIgnoreCase));
+                        if (inScope && !IsPathExcluded(f.SourcePath))
                         {
-                            PurgeDeletedFilesAndDirs(destRootFolder, sourceRoot, cancellationToken, ref purgedFilesCount, ref purgedDirsCount);
+                            // It's in scope but we didn't see it -> Deleted
+                            var lastV = catalog.GetLatestVersion(f.Id);
+                            if (lastV != null && lastV.ChangeType != ChangeType.Deleted)
+                            {
+                                catalog.AddFileVersion(new FileVersion
+                                {
+                                    FileId = f.Id,
+                                    SnapshotId = snapshot.Id,
+                                    ChangeType = ChangeType.Deleted
+                                });
+                                purgedFilesCount++;
+                            }
                         }
                     }
-                    if (purgedFilesCount > 0 || purgedDirsCount > 0)
-                    {
-                        AppendLog($"Purge complete. Removed {purgedFilesCount:N0} files and {purgedDirsCount:N0} directories from active snapshot bucket that no longer exist in source.", Brushes.LightGreen);
-                    }
-                    else
-                    {
-                        AppendLog("Purge phase complete. Snapshot layout matches source definitions cleanly.", Brushes.Gray);
-                    }
                 }
-                catch (Exception purgeEx)
-                {
-                    AppendLog($"Warning: Purge phase encountered an error ({purgeEx.Message})", Brushes.Orange);
-                }
+
+                catalog.UpdateSnapshotStatus(snapshot.Id, SnapshotStatus.Complete);
+                AppendLog($"Backup cycle finished. Copied {backedUpCount:N0} files. {upToDateCount:N0} were up-to-date. {purgedFilesCount:N0} deletions recorded.", Brushes.LightGreen);
 
                 // --- History Retention Window Pruning Step ---
                 try
                 {
                     AppendLog($"Evaluating history retention policy rules ({GlobalExclusions.RetentionDays} days maximum limit)...", Brushes.DeepSkyBlue);
-                    var snapshotDirs = Directory.GetDirectories(mountedDrive, "Snapshot_*");
+                    var snapshots = catalog.GetCompletedSnapshots();
                     int prunedFoldersCount = 0;
-                    foreach (var snapDir in snapshotDirs)
+                    foreach (var snap in snapshots)
                     {
-                        string dirName = Path.GetFileName(snapDir);
-                        // Extract date pattern: Snapshot_yyyy-MM-dd
-                        if (dirName.Length >= 19 && dirName.StartsWith("Snapshot_"))
+                        if ((DateTime.Today - snap.SnapshotDate).TotalDays > GlobalExclusions.RetentionDays)
                         {
-                            string datePart = dirName.Substring(9, 10);
-                            if (DateTime.TryParseExact(datePart, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime snapDate))
+                            AppendLog($"Pruning expired historical data snapshot: {snap.SnapshotDate:yyyy-MM-dd}", Brushes.Orange);
+
+                            string datePattern = $"Snapshot_{snap.SnapshotDate:yyyy-MM-dd}*";
+                            var dirs = Directory.GetDirectories(mountedDrive, datePattern);
+                            foreach (var dir in dirs)
                             {
-                                if ((DateTime.Today - snapDate).TotalDays > GlobalExclusions.RetentionDays)
-                                {
-                                    AppendLog($"Pruning expired historical data snapshot bucket: {dirName}", Brushes.Orange);
-                                    Directory.Delete(snapDir, true);
-                                    prunedFoldersCount++;
-                                }
+                                try { Directory.Delete(dir, true); } catch { }
                             }
+
+                            catalog.DeleteSnapshot(snap.Id);
+                            prunedFoldersCount++;
                         }
                     }
                     if (prunedFoldersCount > 0)
                     {
-                        AppendLog($"Retention cycle complete. Automatically discarded {prunedFoldersCount} expired snapshot timelines from disk space.", Brushes.LightGreen);
-                    }
-                    else
-                    {
-                        AppendLog("Retention check complete. All timeline assets are within valid history specifications.", Brushes.Gray);
+                        AppendLog($"Retention cycle complete. Discarded {prunedFoldersCount} expired snapshots.", Brushes.LightGreen);
                     }
                 }
                 catch (Exception rentEx)
                 {
-                    AppendLog($"Warning: History retention processing encountered layout issues ({rentEx.Message})", Brushes.Orange);
+                    AppendLog($"Warning: History retention encountered issues ({rentEx.Message})", Brushes.Orange);
                 }
-
-                AppendLog("----------------------------------------------------------------", Brushes.Gray);
-                AppendLog($"Backup execution cycle finished.", Brushes.DeepSkyBlue);
             }
             catch (OperationCanceledException)
             {
@@ -1262,16 +1269,16 @@ namespace xBackup
             }
             finally
             {
-                WriteBackupReport(destRoot, filesToProcess != null ? filesToProcess.Count : 0, backedUpCount, upToDateCount, lockedCount, purgedFilesCount, purgedDirsCount, totalBytesMirrored);
+                WriteBackupReport(destRoot, filesToProcess != null ? filesToProcess.Count : 0, backedUpCount, upToDateCount, lockedCount, purgedFilesCount, 0, totalBytesMirrored);
 
                 if (newlyMounted)
                 {
                     try
                     {
-                        AppendLog("Issuing automated full closed-lifecycle disk auto-dismount...", Brushes.DeepSkyBlue);
+                        AppendLog("Issuing automated disk auto-dismount...", Brushes.DeepSkyBlue);
                         Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Visible);
                         DismountVhdx(vhdxPath);
-                        AppendLog("VHDX safely detached and isolated.", Brushes.LightGreen);
+                        AppendLog("VHDX safely detached.", Brushes.LightGreen);
                     }
                     catch (Exception dex)
                     {
@@ -1299,15 +1306,14 @@ namespace xBackup
                 using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
                 {
                     sw.WriteLine("==========================================================================");
-                    sw.WriteLine($"PERSONAL BACKUP ENGINE HISTORICAL EXECUTION REPORT (VHDX MIRROR)");
+                    sw.WriteLine($"PERSONAL BACKUP ENGINE HISTORICAL EXECUTION REPORT (SQLITE SNAPSHOT)");
                     sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
                     sw.WriteLine("==========================================================================");
                     sw.WriteLine($"Total Files Scanned:               {totalScannedCount:N0}");
-                    sw.WriteLine($"Successfully Mirrored / Copied     : {backedUpCount:N0}");
+                    sw.WriteLine($"Successfully Copied (New/Modified) : {backedUpCount:N0}");
                     sw.WriteLine($"Up-to-Date (Skipped Unchanged)     : {upToDateCount:N0}");
                     sw.WriteLine($"Locked / Bypassed System Files      : {lockedCount:N0}");
-                    sw.WriteLine($"Files Purged / Cleaned Up          : {purgedFilesCount:N0}");
-                    sw.WriteLine($"Directories Purged / Cleaned Up    : {purgedDirsCount:N0}");
+                    sw.WriteLine($"Files Marked as Deleted            : {purgedFilesCount:N0}");
                     sw.WriteLine($"Total Sizing Streamed This Session : {FormatBytes(totalBytesMirrored)}");
                     sw.WriteLine("==========================================================================");
 
@@ -1324,7 +1330,7 @@ namespace xBackup
                     else
                     {
                         sw.WriteLine();
-                        sw.WriteLine("Status: High-integrity run. 100% of scanned files backed up without locks.");
+                        sw.WriteLine("Status: High-integrity run. 100% of scanned files processed successfully.");
                     }
                 }
                 AppendLog($"Historical summary session report saved: BackupHistoryLogs\\{logFileName}", Brushes.LightSeaGreen);
@@ -1361,8 +1367,6 @@ namespace xBackup
                 }
             });
 
-            // Create and partition VHDX using DiskPart.
-            // We separate 'format' from DiskPart to handle the /devdrv flag compatibility and provide fallbacks.
             string diskpartSetup = $@"create vdisk file=""{vhdxPath}"" maximum=102400 type=expandable
 select vdisk file=""{vhdxPath}""
 attach vdisk
@@ -1373,40 +1377,29 @@ exit";
             try
             {
                 RunDiskpartScript(diskpartSetup);
-
-                // Attempt to format as Dev Drive (ReFS) first.
-                // DiskPart's internal 'format' command often lacks support for the 'devdrv' flag or fails on Home editions.
                 try
                 {
                     RunPowerShell($"Format-Volume -DriveLetter {driveLetterStr} -FileSystem ReFS -DevDrive -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
-                    // Apply Dev Drive trust policy for performance optimization
                     try { RunSystemCommand("fsutil.exe", $"devdrv trust /vol:{driveLetterStr}:"); } catch { }
                 }
                 catch
                 {
-                    // Fallback 1: Standard ReFS (Non-Dev Drive) - Works on Pro/Enterprise editions
                     try
                     {
                         RunPowerShell($"Format-Volume -DriveLetter {driveLetterStr} -FileSystem ReFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
                     }
                     catch
                     {
-                        // Fallback 2: Standard NTFS - Works on all Windows versions including Home
                         RunPowerShell($"Format-Volume -DriveLetter {driveLetterStr} -FileSystem NTFS -NewFileSystemLabel 'BackupReFS' -Confirm:$false");
                     }
                 }
             }
             finally
             {
-                // Cleanly detach disk so it stays closed lifecycle ready
                 string detachScript = $@"select vdisk file=""{vhdxPath}""
 detach vdisk
 exit";
-                try
-                {
-                    RunDiskpartScript(detachScript);
-                }
-                catch { /* Ignore errors during detach in setup phase */ }
+                try { RunDiskpartScript(detachScript); } catch { }
             }
         }
 
@@ -1431,13 +1424,8 @@ exit";
                 string output = process.StandardOutput.ReadToEnd();
                 string error = process.StandardError.ReadToEnd();
                 process.WaitForExit();
-
                 try { File.Delete(scriptPath); } catch { }
-
-                if (process.ExitCode != 0)
-                {
-                    throw new Exception($"Diskpart allocation failed ({process.ExitCode}). Log: {output} Error: {error}");
-                }
+                if (process.ExitCode != 0) throw new Exception($"Diskpart allocation failed ({process.ExitCode}). Log: {output} Error: {error}");
             }
         }
 
@@ -1486,20 +1474,11 @@ if (Test-Path $path) {{
 Write-Output 'NotMounted';";
 
                 string output = RunPowerShell(script).Trim();
-                if (output == "Mounted" || output == "NotMounted")
-                {
-                    return output;
-                }
-                if (!string.IsNullOrEmpty(output) && char.IsLetter(output[0]))
-                {
-                    return output[0] + ":";
-                }
+                if (output == "Mounted" || output == "NotMounted") return output;
+                if (!string.IsNullOrEmpty(output) && char.IsLetter(output[0])) return output[0] + ":";
                 return "NotMounted";
             }
-            catch
-            {
-                return "NotMounted";
-            }
+            catch { return "NotMounted"; }
         }
 
         private string MountVhdxAndGetLetter(string vhdxPath)
@@ -1513,9 +1492,6 @@ Write-Output 'NotMounted';";
                 }
             });
 
-            // We run the retry logic inside PowerShell to avoid the overhead of starting multiple processes,
-            // and use a more robust discovery path through Get-Disk and Get-Partition.
-            // We MUST discard the output of Mount-DiskImage ($null = ...) otherwise it pollutes the return string.
             string script = $@"
 $path = '{vhdxPath.Replace("'", "''")}';
 $null = Mount-DiskImage -ImagePath $path -StorageType VHDX -ErrorAction SilentlyContinue;
@@ -1523,7 +1499,6 @@ for ($i = 0; $i -lt 20; $i++) {{
     $di = Get-DiskImage -ImagePath $path;
     if ($di.Number -ne $null) {{
         $disk = Get-Disk -Number $di.Number;
-        # Force/assign the specific requested drive letter if it hasn't matched yet
         $part = Get-Partition -DiskNumber $di.Number | Where-Object {{ $_.DriveLetter }}
         if ($part) {{
             if ($part.DriveLetter -ne '{driveLetterStr}') {{
@@ -1537,14 +1512,8 @@ for ($i = 0; $i -lt 20; $i++) {{
 }}";
 
             string output = RunPowerShell(script).Trim();
-
-            if (!string.IsNullOrEmpty(output) && char.IsLetter(output[0]))
-            {
-                // Ensure we only take the letter, even if there's trailing whitespace or objects
-                return output[0] + ":";
-            }
-
-            throw new Exception("VHDX container mounted successfully, but target letter discovery timed out. Please ensure the volume is initialized.");
+            if (!string.IsNullOrEmpty(output) && char.IsLetter(output[0])) return output[0] + ":";
+            throw new Exception("VHDX container mounted successfully, but target letter discovery timed out.");
         }
 
         private static void DismountVhdx(string vhdxPath)
@@ -1570,11 +1539,7 @@ for ($i = 0; $i -lt 20; $i++) {{
                 string output = process.StandardOutput.ReadToEnd();
                 string error = process.StandardError.ReadToEnd();
                 process.WaitForExit();
-
-                if (process.ExitCode != 0)
-                {
-                    throw new Exception($"Storage automation cmdlet failed. Error: {error}");
-                }
+                if (process.ExitCode != 0) throw new Exception($"Storage automation cmdlet failed. Error: {error}");
                 return output;
             }
         }
@@ -1582,8 +1547,6 @@ for ($i = 0; $i -lt 20; $i++) {{
         private void PurgeDeletedFilesAndDirs(string destDir, string sourceDir, System.Threading.CancellationToken cancellationToken, ref long purgedFiles, ref long purgedDirs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            // 1. Purge Files
             try
             {
                 string[] destFiles = Directory.GetFiles(destDir);
@@ -1592,24 +1555,13 @@ for ($i = 0; $i -lt 20; $i++) {{
                     cancellationToken.ThrowIfCancellationRequested();
                     string fileName = Path.GetFileName(df);
                     string sf = Path.Combine(sourceDir, fileName);
-
                     if (!File.Exists(sf))
                     {
-                        try
-                        {
-                            File.Delete(df);
-                            purgedFiles++;
-                        }
-                        catch (Exception ex)
-                        {
-                            _errorDetailsReport.Add($"-> Purge Failed (File): {df} | Reason: {ex.Message}");
-                        }
+                        try { File.Delete(df); purgedFiles++; } catch (Exception ex) { _errorDetailsReport.Add($"-> Purge Failed (File): {df} | Reason: {ex.Message}"); }
                     }
                 }
             }
             catch { }
-
-            // 2. Recursively Purge Subdirectories
             try
             {
                 string[] destSubDirs = Directory.GetDirectories(destDir);
@@ -1618,23 +1570,11 @@ for ($i = 0; $i -lt 20; $i++) {{
                     cancellationToken.ThrowIfCancellationRequested();
                     string dirName = Path.GetFileName(dd);
                     string sd = Path.Combine(sourceDir, dirName);
-
                     if (!Directory.Exists(sd))
                     {
-                        try
-                        {
-                            Directory.Delete(dd, true);
-                            purgedDirs++;
-                        }
-                        catch (Exception ex)
-                        {
-                            _errorDetailsReport.Add($"-> Purge Failed (Dir): {dd} | Reason: {ex.Message}");
-                        }
+                        try { Directory.Delete(dd, true); purgedDirs++; } catch (Exception ex) { _errorDetailsReport.Add($"-> Purge Failed (Dir): {dd} | Reason: {ex.Message}"); }
                     }
-                    else
-                    {
-                        PurgeDeletedFilesAndDirs(dd, sd, cancellationToken, ref purgedFiles, ref purgedDirs);
-                    }
+                    else { PurgeDeletedFilesAndDirs(dd, sd, cancellationToken, ref purgedFiles, ref purgedDirs); }
                 }
             }
             catch { }
@@ -1643,17 +1583,13 @@ for ($i = 0; $i -lt 20; $i++) {{
         private void DiscoverFilesRecursively(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            // Skip reparse points (junctions/symlinks) to avoid infinite recursion loops and redundant data
             try
             {
                 var dirInfo = new DirectoryInfo(currentDir);
                 if (dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint)) return;
             }
             catch { return; }
-
             if (IsPathExcluded(currentDir)) return;
-
             try
             {
                 string[] dirFiles = Directory.GetFiles(currentDir);
@@ -1661,20 +1597,14 @@ for ($i = 0; $i -lt 20; $i++) {{
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     scannedCount++;
-
                     try
                     {
                         var fi = new FileInfo(f);
-                        // Skip system/hidden files and reparse points in discovery
                         if (fi.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
                         if (fi.Attributes.HasFlag(FileAttributes.Hidden) || fi.Attributes.HasFlag(FileAttributes.System)) continue;
                     }
                     catch { continue; }
-
-                    if (!IsPathExcluded(f))
-                    {
-                        files.Add(f);
-                    }
+                    if (!IsPathExcluded(f)) files.Add(f);
                 }
             }
             catch (Exception dirEx)
@@ -1683,27 +1613,19 @@ for ($i = 0; $i -lt 20; $i++) {{
                 _errorDetailsReport.Add($"-> Scope Folder Lock: {currentDir} | Reason: Access Denied ({dirEx.Message})");
                 return;
             }
-
             try
             {
                 string[] subDirs = Directory.GetDirectories(currentDir);
-                foreach (var d in subDirs)
-                {
-                    DiscoverFilesRecursively(d, files, ref scannedCount, cancellationToken);
-                }
+                foreach (var d in subDirs) { DiscoverFilesRecursively(d, files, ref scannedCount, cancellationToken); }
             }
-            catch (Exception subDirEx)
-            {
-                _errorDetailsReport.Add($"-> Subfolder Tree Lock: {currentDir} | Reason: Bypassed Subdirectories traversal ({subDirEx.Message})");
-            }
+            catch (Exception subDirEx) { _errorDetailsReport.Add($"-> Subfolder Tree Lock: {currentDir} | Reason: Bypassed Subdirectories traversal ({subDirEx.Message})"); }
         }
 
         private bool IsPathExcluded(string fullPath)
         {
             string lower = fullPath.ToLower();
-
             if (GlobalExclusions.IsCustomExcluded(lower)) return true;
-
+            if (GlobalExclusions.IsDefaultExcluded(fullPath)) return true;
             return false;
         }
 
@@ -1711,8 +1633,8 @@ for ($i = 0; $i -lt 20; $i++) {{
         {
             if (fullPath.Length >= 3 && fullPath[1] == ':' && fullPath[2] == '\\')
             {
-                char driveLetter = fullPath[0];
-                return $"Drive_{driveLetter}" + fullPath.Substring(2);
+                char driveLetter = char.ToUpper(fullPath[0]);
+                return Path.Combine(driveLetter.ToString(), fullPath.Substring(3));
             }
             return fullPath;
         }
@@ -1722,11 +1644,7 @@ for ($i = 0; $i -lt 20; $i++) {{
             string[] suffix = { "B", "KB", "MB", "GB", "TB" };
             double dblBytes = bytes;
             int i = 0;
-            while (dblBytes >= 1024 && i < suffix.Length - 1)
-            {
-                i++;
-                dblBytes /= 1024;
-            }
+            while (dblBytes >= 1024 && i < suffix.Length - 1) { i++; dblBytes /= 1024; }
             return $"{dblBytes:F2} {suffix[i]}";
         }
 
@@ -1737,12 +1655,7 @@ for ($i = 0; $i -lt 20; $i++) {{
                 Run run = new Run($"[{DateTime.Now:HH:mm:ss}] {message}\n") { Foreground = color };
                 Paragraph para = new Paragraph(run) { Margin = new Thickness(0), LineHeight = 16 };
                 RtbLog.Document.Blocks.Add(para);
-
-                if (RtbLog.Document.Blocks.Count > 1200)
-                {
-                    RtbLog.Document.Blocks.Remove(RtbLog.Document.Blocks.FirstBlock);
-                }
-
+                if (RtbLog.Document.Blocks.Count > 1200) RtbLog.Document.Blocks.Remove(RtbLog.Document.Blocks.FirstBlock);
                 LogScrollViewer.ScrollToEnd();
             });
         }
