@@ -1,0 +1,166 @@
+<Window x:Class="xBackup.RestoreWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:xBackup"
+        Title="Point-in-Time Restore Manager" Height="800" Width="900"
+        Background="#1E1E1E" WindowStartupLocation="CenterOwner">
+
+    <Window.Resources>
+        <!-- Dark theme styles for TreeViewItem -->
+        <Style TargetType="TreeViewItem">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TreeViewItem">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" MinWidth="19"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <ToggleButton x:Name="Expander" ClickMode="Press" IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            <Border x:Name="Bd" Grid.Column="1" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="true">
+                                <ContentPresenter x:Name="PART_Header" ContentSource="Header" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                            </Border>
+                            <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.Column="1" Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsExpanded" Value="true">
+                                <Setter TargetName="ItemsHost" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="HasItems" Value="false">
+                                <Setter TargetName="Expander" Property="Visibility" Value="Hidden"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="true">
+                                <Setter TargetName="Bd" Property="Background" Value="#3E3E42"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Simple ToggleButton Style for TreeView Expander -->
+        <Style TargetType="ToggleButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="Transparent" Width="16" Height="16">
+                            <Path x:Name="ExpandPath" Data="M2,2 L2,10 L6,6 Z" Fill="#858585" HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                                <Path.RenderTransform>
+                                    <RotateTransform Angle="0"/>
+                                </Path.RenderTransform>
+                            </Path>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="ExpandPath" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <RotateTransform Angle="45"/>
+                                    </Setter.Value>
+                                </Setter>
+                                <Setter TargetName="ExpandPath" Property="Fill" Value="#D4D4D4"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ExpandPath" Property="Fill" Value="#007ACC"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Hierarchical Data Template for RestoreNode -->
+        <HierarchicalDataTemplate DataType="{x:Type local:RestoreNode}" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal" Margin="2">
+                <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <TextBlock Text="{Binding Name}" Foreground="{Binding ForegroundBrush}" VerticalAlignment="Center" FontSize="13" FontFamily="Segoe UI"/>
+            </StackPanel>
+        </HierarchicalDataTemplate>
+    </Window.Resources>
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>   <!-- Header -->
+            <RowDefinition Height="Auto"/>   <!-- Settings (Snapshot & Destination) -->
+            <RowDefinition Height="*"/>      <!-- TreeView -->
+            <RowDefinition Height="Auto"/>   <!-- Footer Actions -->
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0" Background="#252526" CornerRadius="6" Padding="15" Margin="0,0,0,15" BorderBrush="#3E3E42" BorderThickness="1">
+            <StackPanel>
+                <TextBlock Text="HISTORICAL RESTORE MANAGER" FontSize="18" FontWeight="Bold" Foreground="#007ACC"/>
+                <TextBlock Text="Select a point-in-time snapshot to reconstruct your files. The tree below represents the complete filesystem state as it existed at that moment." FontSize="11" Foreground="#858585" Margin="0,4,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Configuration -->
+        <Grid Grid.Row="1" Margin="0,0,0,15">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                <TextBlock Text="Restore Point (Snapshot):" FontSize="12" Foreground="#858585" Margin="0,0,0,5"/>
+                <ComboBox x:Name="CboSnapshots" DisplayMemberPath="SnapshotDate" SelectedValuePath="Id" SelectionChanged="CboSnapshots_SelectionChanged" Background="#1E1E1E" Foreground="White" BorderBrush="#3E3E42"/>
+
+                <StackPanel Orientation="Horizontal" Margin="0,15,0,0">
+                    <RadioButton x:Name="RbFullRestore" Content="Full Restore (Original Locations)" IsChecked="True" Foreground="#D4D4D4" Margin="0,0,20,0"/>
+                    <RadioButton x:Name="RbSelectiveRestore" Content="Selective Restore" Foreground="#D4D4D4"/>
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="Restore Destination Folder:" FontSize="12" Foreground="#858585" Margin="0,0,0,5"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="TxtDestPath" Background="#1E1E1E" Foreground="White" BorderBrush="#3E3E42" Padding="6" IsEnabled="{Binding IsChecked, ElementName=RbSelectiveRestore}"/>
+                    <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="30" Margin="5,0,0,0" Background="#3E3E42" Click="BtnBrowseDest_Click" IsEnabled="{Binding IsChecked, ElementName=RbSelectiveRestore}"/>
+                </Grid>
+
+                <CheckBox x:Name="ChkOverwrite" Content="Overwrite existing files" Foreground="#D4D4D4" Margin="0,10,0,0" IsChecked="True"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- TreeView -->
+        <Border Grid.Row="2" Background="#252526" CornerRadius="6" BorderBrush="#3E3E42" BorderThickness="1" Padding="10" Margin="0,0,0,15">
+            <Grid>
+                <TreeView x:Name="RestoreTreeView" Background="#111111" BorderThickness="0" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling"/>
+                <ProgressBar x:Name="PrgLoading" IsIndeterminate="True" Height="4" VerticalAlignment="Top" Visibility="Collapsed"/>
+                <TextBlock x:Name="TxtNoData" Text="Select a restore point to load files..." Foreground="#858585" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Visible"/>
+            </Grid>
+        </Border>
+
+        <!-- Footer -->
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <Button x:Name="BtnSelectAll" Content="Select All" Width="100" Height="32" Margin="0,0,10,0" Background="#3E3E42" Click="BtnSelectAll_Click"/>
+                <Button x:Name="BtnClearAll" Content="Clear All" Width="100" Height="32" Background="#3E3E42" Click="BtnClearAll_Click"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <Button x:Name="BtnCancel" Content="Cancel" Width="100" Height="32" Margin="0,0,10,0" Background="#3E3E42" Click="BtnCancel_Click"/>
+                <Button x:Name="BtnRestore" Content="Start Restore" Width="140" Height="32" Background="#007ACC" FontWeight="Bold" Click="BtnRestore_Click"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>
