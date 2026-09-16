@@ -231,7 +231,7 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <Button x:Name="BtnConfigureExclusions" Content="Configure Custom Exclusions..." Height="34" Margin="0,12,0,0" Background="#3E3E42" Foreground="#D4D4D4" Click="BtnConfigureExclusions_Click"/>
+                    <Button x:Name="BtnConfigureExclusions" Content="Configure Custom Exclusions..." Height="34" Margin="0,12,0,0" Background="#3E3E42" Click="BtnConfigureExclusions_Click"/>
                 </StackPanel>
             </Border>
 

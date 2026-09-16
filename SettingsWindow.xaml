@@ -125,8 +125,8 @@
                 <TextBlock Text="days" Foreground="#858585" VerticalAlignment="Center" FontSize="13" Margin="6,0,0,0"/>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="BtnCancel" Content="Cancel" Width="100" Height="32" Margin="0,0,10,0" Background="#3E3E42" Foreground="#D4D4D4" BorderBrush="#555555" Click="BtnCancel_Click"/>
-                <Button x:Name="BtnSave" Content="Save Settings" Width="140" Height="32" Background="#007ACC" Foreground="White" BorderBrush="Transparent" Click="BtnSave_Click"/>
+                <Button x:Name="BtnCancel" Content="Cancel" Width="100" Height="32" Margin="0,0,10,0" Background="#3E3E42" BorderBrush="#555555" Click="BtnCancel_Click"/>
+                <Button x:Name="BtnSave" Content="Save Settings" Width="140" Height="32" Background="#007ACC" BorderBrush="Transparent" Click="BtnSave_Click"/>
             </StackPanel>
         </Grid>
     </Grid>
