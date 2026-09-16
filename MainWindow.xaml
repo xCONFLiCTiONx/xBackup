@@ -48,6 +48,51 @@
         <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#252526"/>
         <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#D4D4D4"/>
 
+        <!-- Custom Dark ScrollBar Theme Styles -->
+        <Style TargetType="{x:Type RepeatButton}" x:Key="ScrollBarLineButton">
+            <Setter Property="Visibility" Value="Collapsed"/>
+        </Style>
+        <Style TargetType="{x:Type Thumb}" x:Key="ScrollBarPageThumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Thumb}">
+                        <Border x:Name="ThumbBorder" Background="#4E4E4E" CornerRadius="3" Margin="2,0"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ThumbBorder" Property="Background" Value="#6E6E6E"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="ThumbBorder" Property="Background" Value="#9E9E9E"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="{x:Type ScrollBar}">
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ScrollBar}">
+                        <Grid x:Name="Bg" Background="#1E1E1E" SnapsToDevicePixels="true">
+                            <Track x:Name="PART_Track" IsDirectionReversed="true" IsEnabled="{TemplateBinding IsEnabled}">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollBarLineButton}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollBarLineButton}"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollBarPageThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Custom ControlTemplate to force the popup menu list container background completely dark -->
         <Style TargetType="ComboBox">
             <Setter Property="Background" Value="#1E1E1E"/>
@@ -147,7 +192,7 @@
                 <StackPanel>
                     <TextBlock Text="Backup Scopes (System Drives)" FontSize="14" FontWeight="Bold" Foreground="#D4D4D4" Margin="0,0,0,10"/>
 
-                    <ItemsControl x:Name="ItemsScopes" MaxHeight="140">
+                    <ItemsControl x:Name="ItemsScopes" MaxHeight="86">
                         <ItemsControl.Template>
                             <ControlTemplate TargetType="ItemsControl">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -246,10 +291,12 @@
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
                 <Button x:Name="BtnScheduleTask" Content="Register Midnight Wake Task" Width="230" Background="#3E3E42" Click="BtnScheduleTask_Click"/>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="BtnToggleMount" Content="Mount Backup Drive" Width="200" Margin="0,0,10,0" Background="#3E3E42" Click="BtnToggleMount_Click"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <CheckBox x:Name="ChkOverwrite" Content="Overwrite Existing Files" Foreground="#D4D4D4" VerticalAlignment="Center" Margin="0,0,15,0" IsChecked="False"/>
+                <Button x:Name="BtnRestore" Content="Restore Files..." Width="150" Margin="0,0,10,0" Background="#3E3E42" Click="BtnRestore_Click"/>
+                <Button x:Name="BtnToggleMount" Content="Mount Backup Drive" Width="180" Margin="0,0,10,0" Background="#3E3E42" Click="BtnToggleMount_Click"/>
                 <Button x:Name="BtnStop" Content="Stop" Width="80" Margin="0,0,10,0" Background="#B43232" Click="BtnStop_Click" IsEnabled="False"/>
-                <Button x:Name="BtnBackup" Content="Execute Incremental Backup" Width="240" Background="#007ACC" Click="BtnBackup_Click"/>
+                <Button x:Name="BtnBackup" Content="Execute Incremental Backup" Width="220" Background="#007ACC" Click="BtnBackup_Click"/>
             </StackPanel>
         </Grid>
 

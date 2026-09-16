@@ -62,12 +62,39 @@ namespace xBackup
 
         public System.Windows.Input.ICommand ShowWindowCommand { get; }
 
+        private static void PreloadDiskpartUtility()
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart.exe",
+                        Arguments = "?", // standard help command to warm up process initialization cache
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    using (var process = Process.Start(startInfo))
+                    {
+                        process?.WaitForExit();
+                    }
+                }
+                catch { }
+            });
+        }
+
         public MainWindow(bool silentMode)
         {
             _isSilentMode = silentMode;
             ShowWindowCommand = new RelayCommand(RestoreFromTray);
             InitializeComponent();
             DataContext = this;
+
+            // Preload diskpart worker subsystems asynchronously on start
+            PreloadDiskpartUtility();
 
             // Load saved coordinates from configuration cache if existing
             LoadWindowPlacementSettings();
@@ -312,7 +339,7 @@ namespace xBackup
             {
                 e.Cancel = true;
                 Hide();
-                _notifyIcon?.ShowNotification("Backup Active", "The Backup execution is still running in the background system tray.");
+                _notifyIcon?.ShowNotification("Engine Active", "The Backup or Restore execution is still running in the background system tray.");
             }
             else
             {
@@ -617,10 +644,272 @@ namespace xBackup
         {
             _isProcessing = processing;
             BtnBackup.IsEnabled = !processing;
+            BtnRestore.IsEnabled = !processing;
             BtnToggleMount.IsEnabled = !processing;
             BtnStop.IsEnabled = processing;
             TxtStatus.Text = processing ? "Engine Status: Active" : "Engine Status: Ready";
             TxtStatus.Foreground = processing ? new SolidColorBrush(Color.FromRgb(220, 202, 170)) : new SolidColorBrush(Color.FromRgb(78, 201, 176));
+        }
+
+        private async void BtnRestore_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isProcessing) return;
+
+            _destinationRoot = TxtDestRoot.Text;
+            string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
+
+            string mountedDrive = "";
+            try
+            {
+                AppendLog("Checking backup drive status for restore...", Brushes.DeepSkyBlue);
+                mountedDrive = await Task.Run(() => CheckVhdxMountStatus(vhdxPath));
+
+                if (mountedDrive == "NotMounted")
+                {
+                    AppendLog("Mounting backup drive for restore...", Brushes.DeepSkyBlue);
+                    mountedDrive = await Task.Run(() => MountVhdxAndGetLetter(vhdxPath));
+                    _isVhdxMountedManual = true;
+                    Dispatcher.Invoke(() =>
+                    {
+                        BtnToggleMount.Content = "Eject Drive";
+                        BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(180, 50, 50));
+                    });
+                }
+                else if (mountedDrive == "Mounted")
+                {
+                     mountedDrive = await Task.Run(() => MountVhdxAndGetLetter(vhdxPath));
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Mount failure: {ex.Message}", Brushes.Red);
+                MessageBox.Show($"Failed to mount backup drive: {ex.Message}", "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            var snapshotDialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Select Snapshot Folder to Restore FROM",
+                InitialDirectory = mountedDrive
+            };
+
+            if (snapshotDialog.ShowDialog() != true) return;
+            string snapshotPath = snapshotDialog.FolderName;
+
+            var targetDialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Select Destination Folder to Restore TO"
+            };
+
+            if (targetDialog.ShowDialog() != true) return;
+            string targetPath = targetDialog.FolderName;
+
+            bool overwrite = ChkOverwrite.IsChecked ?? false;
+
+            SetUiState(processing: true);
+            RtbLog.Document.Blocks.Clear();
+            PrgBar.Value = 0;
+
+            _cts = new System.Threading.CancellationTokenSource();
+
+            try
+            {
+                await Task.Run(() => RunRestoreEngine(snapshotPath, targetPath, overwrite, _cts.Token));
+            }
+            catch (OperationCanceledException)
+            {
+                AppendLog("Restore operation was cancelled by the user.", Brushes.Orange);
+            }
+            finally
+            {
+                _cts.Dispose();
+                _cts = null;
+                SetUiState(processing: false);
+            }
+        }
+
+        private void RunRestoreEngine(string snapshotPath, string targetPath, bool overwrite, System.Threading.CancellationToken cancellationToken)
+        {
+            try
+            {
+                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+                AppendLog("Initializing Restore Lifecycle...", Brushes.DeepSkyBlue);
+
+                _errorDetailsReport.Clear();
+                List<string> filesToRestore = new List<string>();
+                long totalScannedCount = 0;
+
+                AppendLog("Scanning snapshot contents...", Brushes.DeepSkyBlue);
+                DiscoverFilesForRestore(snapshotPath, filesToRestore, ref totalScannedCount, cancellationToken);
+
+                Dispatcher.Invoke(() =>
+                {
+                    LblScanned.Text = filesToRestore.Count.ToString("N0");
+                    PrgBar.Maximum = filesToRestore.Count;
+                    TxtProgressDetails.Text = $"Found {filesToRestore.Count:N0} files to restore.";
+                });
+
+                long restoredCount = 0;
+                long skippedCount = 0;
+                long errorCount = 0;
+                long totalBytesRestored = 0;
+
+                for (int i = 0; i < filesToRestore.Count; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var file = filesToRestore[i];
+                    int currentIndex = i + 1;
+
+                    string relativePath = Path.GetRelativePath(snapshotPath, file);
+                    string destPath = Path.Combine(targetPath, relativePath);
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToRestore.Count:N0}] Restoring: {Path.GetFileName(file)}";
+                        if (currentIndex % 100 == 0 || currentIndex == filesToRestore.Count)
+                        {
+                            PrgBar.Value = currentIndex;
+                            LblBackedUp.Text = restoredCount.ToString("N0");
+                            LblUpToDate.Text = skippedCount.ToString("N0");
+                            LblLocked.Text = errorCount.ToString("N0");
+                            LblSavings.Text = FormatBytes(totalBytesRestored);
+                        }
+                    });
+
+                    try
+                    {
+                        FileInfo sourceFi = new FileInfo(file);
+                        if (File.Exists(destPath))
+                        {
+                            if (!overwrite)
+                            {
+                                skippedCount++;
+                                continue;
+                            }
+                        }
+
+                        string? parentDir = Path.GetDirectoryName(destPath);
+                        if (parentDir != null && !Directory.Exists(parentDir))
+                        {
+                            Directory.CreateDirectory(parentDir);
+                        }
+
+                        File.Copy(file, destPath, overwrite: true);
+                        File.SetLastWriteTimeUtc(destPath, sourceFi.LastWriteTimeUtc);
+
+                        restoredCount++;
+                        totalBytesRestored += sourceFi.Length;
+
+                        if (restoredCount <= 100 || sourceFi.Length > 50 * 1024 * 1024)
+                        {
+                            AppendLog($"[Restore] {Path.GetFileName(file)} ({FormatBytes(sourceFi.Length)})", Brushes.LightGreen);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        errorCount++;
+                        _errorDetailsReport.Add($"-> {file} | Restore Failed: {ex.Message}");
+                        if (errorCount <= 50)
+                        {
+                            AppendLog($"Restore failed for: {Path.GetFileName(file)} ({ex.Message})", Brushes.Yellow);
+                        }
+                    }
+                }
+
+                AppendLog("----------------------------------------------------------------", Brushes.Gray);
+                AppendLog($"Restore execution completed.", Brushes.DeepSkyBlue);
+                AppendLog($"Successfully Restored: {restoredCount:N0} files.", Brushes.LightGreen);
+                AppendLog($"Skipped (Existing): {skippedCount:N0} files.", Brushes.Gray);
+                AppendLog($"Errors encountered: {errorCount:N0} files.", Brushes.Yellow);
+
+                try
+                {
+                    string historyDir = Path.Combine(targetPath, "RestoreLogs");
+                    if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
+
+                    string logFileName = $"RestoreReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
+                    string fullLogPath = Path.Combine(historyDir, logFileName);
+
+                    using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
+                    {
+                        sw.WriteLine("==========================================================================");
+                        sw.WriteLine($"PERSONAL BACKUP ENGINE RESTORE EXECUTION REPORT");
+                        sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                        sw.WriteLine("==========================================================================");
+                        sw.WriteLine($"Snapshot Path: {snapshotPath}");
+                        sw.WriteLine($"Restore Path:  {targetPath}");
+                        sw.WriteLine($"Overwrite:     {overwrite}");
+                        sw.WriteLine("--------------------------------------------------------------------------");
+                        sw.WriteLine($"Total Files Scanned in Snapshot: {filesToRestore.Count:N0}");
+                        sw.WriteLine($"Successfully Restored:           {restoredCount:N0}");
+                        sw.WriteLine($"Skipped (Existing):              {skippedCount:N0}");
+                        sw.WriteLine($"Errors encountered:              {errorCount:N0}");
+                        sw.WriteLine($"Total Sizing Restored:           {FormatBytes(totalBytesRestored)}");
+                        sw.WriteLine("==========================================================================");
+
+                        if (_errorDetailsReport.Count > 0)
+                        {
+                            sw.WriteLine();
+                            sw.WriteLine("RESTORE ERRORS / BYPASSED FILES DETAILS:");
+                            sw.WriteLine("--------------------------------------------------------------------------");
+                            foreach (var errItem in _errorDetailsReport)
+                            {
+                                sw.WriteLine(errItem);
+                            }
+                        }
+                    }
+                    AppendLog($"Restore session report saved: RestoreLogs\\{logFileName}", Brushes.LightSeaGreen);
+                }
+                catch (Exception historyEx)
+                {
+                    AppendLog($"Warning: Could not compile restore log file ({historyEx.Message})", Brushes.Orange);
+                }
+
+                Dispatcher.Invoke(() =>
+                {
+                    TxtProgressDetails.Text = "Restore Complete!";
+                    LblBackedUp.Text = restoredCount.ToString("N0");
+                    LblUpToDate.Text = skippedCount.ToString("N0");
+                    LblLocked.Text = errorCount.ToString("N0");
+                    LblSavings.Text = FormatBytes(totalBytesRestored);
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Restore engine failure: {ex.Message}", Brushes.Red);
+            }
+            finally
+            {
+                SetThreadExecutionState(ES_CONTINUOUS);
+            }
+        }
+
+        private void DiscoverFilesForRestore(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                string[] dirFiles = Directory.GetFiles(currentDir);
+                foreach (var f in dirFiles)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    scannedCount++;
+                    files.Add(f);
+                }
+
+                string[] subDirs = Directory.GetDirectories(currentDir);
+                foreach (var d in subDirs)
+                {
+                    DiscoverFilesForRestore(d, files, ref scannedCount, cancellationToken);
+                }
+            }
+            catch { }
         }
 
         private void RunBackupEngine(string destRoot, System.Threading.CancellationToken cancellationToken, BackupCheckpoint? checkpoint = null)
