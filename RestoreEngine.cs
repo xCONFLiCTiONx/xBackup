@@ -17,21 +17,8 @@ namespace xBackup
             _backupRoot = backupRoot;
         }
 
-        public void RestoreSnapshot(int snapshotId, string targetPath, bool overwrite, CancellationToken token, Action<string, int, int> onProgress)
+        public void RestoreFiles(List<(string sourcePath, FileVersion version)> filesToRestore, string? targetPath, bool fullRestore, bool overwrite, CancellationToken token, Action<string, int, int> onProgress, Action<string>? onError = null)
         {
-            var allFiles = _catalog.GetAllFiles();
-            var filesToRestore = new List<(BackupFile file, FileVersion version)>();
-
-            foreach (var f in allFiles)
-            {
-                token.ThrowIfCancellationRequested();
-                var latest = _catalog.GetLatestVersion(f.Id, snapshotId);
-                if (latest != null && latest.ChangeType != ChangeType.Deleted)
-                {
-                    filesToRestore.Add((f, latest));
-                }
-            }
-
             int count = 0;
             int total = filesToRestore.Count;
 
@@ -39,31 +26,45 @@ namespace xBackup
             {
                 token.ThrowIfCancellationRequested();
                 count++;
-                onProgress?.Invoke(item.file.SourcePath, count, total);
+                onProgress?.Invoke(item.sourcePath, count, total);
 
                 if (string.IsNullOrEmpty(item.version.BackupPath)) continue;
 
                 string physicalSourcePath = Path.Combine(_backupRoot, item.version.BackupPath);
-                if (!File.Exists(physicalSourcePath)) continue;
+                if (!File.Exists(physicalSourcePath))
+                {
+                    onError?.Invoke($"Missing physical backup file: {item.version.BackupPath}");
+                    continue;
+                }
 
-                // Reconstruct the original path structure under the target path
-                // We use the SourcePath to determine the relative structure, but we need to handle drive letters.
-                // The BackupPath itself already encodes the drive letter if we used MapToBackupPath correctly.
-                // Actually, let's just use the relative part of SourcePath or reconstruct it.
-
-                string relativePath = GetRelativePathForRestore(item.file.SourcePath);
-                string destinationPath = Path.Combine(targetPath, relativePath);
+                string destinationPath;
+                if (fullRestore)
+                {
+                    destinationPath = item.sourcePath;
+                }
+                else
+                {
+                    string relativePath = GetRelativePathForRestore(item.sourcePath);
+                    destinationPath = Path.Combine(targetPath ?? string.Empty, relativePath);
+                }
 
                 if (File.Exists(destinationPath) && !overwrite) continue;
 
-                string? parent = Path.GetDirectoryName(destinationPath);
-                if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
+                try
                 {
-                    Directory.CreateDirectory(parent);
-                }
+                    string? parent = Path.GetDirectoryName(destinationPath);
+                    if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
+                    {
+                        Directory.CreateDirectory(parent);
+                    }
 
-                File.Copy(physicalSourcePath, destinationPath, overwrite: true);
-                File.SetLastWriteTimeUtc(destinationPath, item.version.LastWriteUtc);
+                    File.Copy(physicalSourcePath, destinationPath, overwrite: true);
+                    File.SetLastWriteTimeUtc(destinationPath, item.version.LastWriteUtc);
+                }
+                catch (Exception ex)
+                {
+                    onError?.Invoke($"Failed to restore {item.sourcePath}: {ex.Message}");
+                }
             }
         }
 

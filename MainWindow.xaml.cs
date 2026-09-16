@@ -657,6 +657,13 @@ namespace xBackup
             TxtStatus.Foreground = processing ? new SolidColorBrush(Color.FromRgb(220, 202, 170)) : new SolidColorBrush(Color.FromRgb(78, 201, 176));
         }
 
+        private string GetBackupMountedDrive()
+        {
+            string vhdxPath = Path.Combine(TxtDestRoot.Text, "BackupDev.vhdx");
+            string status = CheckVhdxMountStatus(vhdxPath);
+            return (status != "NotMounted" && status != "Mounted") ? status : string.Empty;
+        }
+
         private async void BtnRestore_Click(object sender, RoutedEventArgs e)
         {
             if (_isProcessing) return;
@@ -693,52 +700,14 @@ namespace xBackup
                 return;
             }
 
-            var snapshotDialog = new Microsoft.Win32.OpenFolderDialog
-            {
-                Title = "Select Snapshot Folder to Restore FROM",
-                InitialDirectory = mountedDrive
-            };
+            using var catalog = new BackupCatalog(dbPath);
+            var restoreWindow = new RestoreWindow(catalog, mountedDrive) { Owner = this };
 
-            if (snapshotDialog.ShowDialog() != true) return;
-            string snapshotPath = snapshotDialog.FolderName;
+            if (restoreWindow.ShowDialog() != true) return;
 
-            // Differentiate between Legacy and Catalog
-            string folderName = Path.GetFileName(snapshotPath);
-            bool isCatalogSnapshot = false;
-            int snapshotId = -1;
-
-            string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
-            if (File.Exists(dbPath))
-            {
-                using var catalog = new BackupCatalog(dbPath);
-                var snap = catalog.GetSnapshotByFolderName(folderName);
-                if (snap != null)
-                {
-                    isCatalogSnapshot = true;
-                    snapshotId = snap.Id;
-                }
-            }
-
-            if (!isCatalogSnapshot)
-            {
-                var result = MessageBox.Show(
-                    "Selected folder is not recognized in the backup catalog. It may be a legacy backup.\n\nProceed with legacy (full-folder) restore?",
-                    "Legacy Backup Detected",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning
-                );
-                if (result != MessageBoxResult.Yes) return;
-            }
-
-            var targetDialog = new Microsoft.Win32.OpenFolderDialog
-            {
-                Title = "Select Destination Folder to Restore TO"
-            };
-
-            if (targetDialog.ShowDialog() != true) return;
-            string targetPath = targetDialog.FolderName;
-
-            bool overwrite = ChkOverwrite.IsChecked ?? false;
+            var selectedItems = restoreWindow.SelectedNodes
+                .Select(n => (n.FullPath, n.Version!))
+                .ToList();
 
             SetUiState(processing: true);
             RtbLog.Document.Blocks.Clear();
@@ -748,14 +717,7 @@ namespace xBackup
 
             try
             {
-                if (isCatalogSnapshot)
-                {
-                    await Task.Run(() => RunCatalogRestoreEngine(mountedDrive, snapshotId, targetPath, overwrite, _cts.Token));
-                }
-                else
-                {
-                    await Task.Run(() => RunLegacyRestoreEngine(snapshotPath, targetPath, overwrite, _cts.Token));
-                }
+                await Task.Run(() => RunCatalogRestoreEngine(mountedDrive, selectedItems, restoreWindow.TargetPath, restoreWindow.FullRestore, restoreWindow.Overwrite, _cts.Token));
             }
             catch (OperationCanceledException)
             {
@@ -769,18 +731,20 @@ namespace xBackup
             }
         }
 
-        private void RunCatalogRestoreEngine(string mountedDrive, int snapshotId, string targetPath, bool overwrite, System.Threading.CancellationToken cancellationToken)
+        private void RunCatalogRestoreEngine(string mountedDrive, List<(string sourcePath, FileVersion version)> filesToRestore, string? targetPath, bool fullRestore, bool overwrite, System.Threading.CancellationToken cancellationToken)
         {
+            var restoreErrors = new List<string>();
             try
             {
                 SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
-                AppendLog($"Initializing Catalog Restore Lifecycle (Snapshot ID: {snapshotId})...", Brushes.DeepSkyBlue);
+                AppendLog($"Initializing Catalog Restore for {filesToRestore.Count:N0} files...", Brushes.DeepSkyBlue);
 
                 string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
                 using var catalog = new BackupCatalog(dbPath);
                 var engine = new RestoreEngine(catalog, mountedDrive);
 
-                engine.RestoreSnapshot(snapshotId, targetPath, overwrite, cancellationToken, (file, current, total) =>
+                int errorCount = 0;
+                engine.RestoreFiles(filesToRestore, targetPath, fullRestore, overwrite, cancellationToken, (file, current, total) =>
                 {
                     Dispatcher.Invoke(() =>
                     {
@@ -792,12 +756,28 @@ namespace xBackup
                             PrgBar.Maximum = total;
                             PrgBar.Value = current;
                             LblScanned.Text = total.ToString("N0");
-                            LblBackedUp.Text = current.ToString("N0");
+                            LblBackedUp.Text = (current - errorCount).ToString("N0");
+                            LblLocked.Text = errorCount.ToString("N0");
                         }
                     });
+                }, (error) =>
+                {
+                    errorCount++;
+                    restoreErrors.Add(error);
                 });
 
-                AppendLog("Catalog restore successfully completed.", Brushes.LightGreen);
+                if (restoreErrors.Count > 0)
+                {
+                    AppendLog($"Restore finished with {restoreErrors.Count} errors.", Brushes.Yellow);
+                    foreach (var err in restoreErrors.Take(50)) // Don't spam the log too much
+                    {
+                        AppendLog($"-> {err}", Brushes.Red);
+                    }
+                }
+                else
+                {
+                    AppendLog("Catalog restore successfully completed.", Brushes.LightGreen);
+                }
             }
             catch (Exception ex)
             {
@@ -806,6 +786,12 @@ namespace xBackup
             finally
             {
                 SetThreadExecutionState(ES_CONTINUOUS);
+                Dispatcher.Invoke(() =>
+                {
+                    TxtProgressDetails.Text = "Restore Operation Finished";
+                    _currentFilePath = null;
+                    TxtProgressDetails.Foreground = DefaultBrush;
+                });
             }
         }
 

@@ -81,7 +81,7 @@
         <!-- Hierarchical Data Template for RestoreNode -->
         <HierarchicalDataTemplate DataType="{x:Type local:RestoreNode}" ItemsSource="{Binding Children}">
             <StackPanel Orientation="Horizontal" Margin="2">
-                <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" IsThreeState="True" VerticalAlignment="Center" Margin="0,0,6,0"/>
                 <TextBlock Text="{Binding Name}" Foreground="{Binding ForegroundBrush}" VerticalAlignment="Center" FontSize="13" FontFamily="Segoe UI"/>
             </StackPanel>
         </HierarchicalDataTemplate>
@@ -138,7 +138,13 @@
         <!-- TreeView -->
         <Border Grid.Row="2" Background="#252526" CornerRadius="6" BorderBrush="#3E3E42" BorderThickness="1" Padding="10" Margin="0,0,0,15">
             <Grid>
-                <TreeView x:Name="RestoreTreeView" Background="#111111" BorderThickness="0" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling"/>
+                <TreeView x:Name="RestoreTreeView" Background="#111111" BorderThickness="0" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling">
+                    <TreeView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel />
+                        </ItemsPanelTemplate>
+                    </TreeView.ItemsPanel>
+                </TreeView>
                 <ProgressBar x:Name="PrgLoading" IsIndeterminate="True" Height="4" VerticalAlignment="Top" Visibility="Collapsed"/>
                 <TextBlock x:Name="TxtNoData" Text="Select a restore point to load files..." Foreground="#858585" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Visible"/>
             </Grid>

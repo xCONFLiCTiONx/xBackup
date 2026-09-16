@@ -256,22 +256,82 @@ namespace xBackup
             return list;
         }
 
-        public List<BackupFile> GetAllFiles()
+        public List<Snapshot> GetSnapshots()
         {
-            var list = new List<BackupFile>();
+            var list = new List<Snapshot>();
             using (var command = _connection.CreateCommand())
             {
-                command.CommandText = "SELECT Id, SourcePath, NormalizedPath FROM Files";
+                command.CommandText = "SELECT Id, SnapshotDate, StartedUtc, CompletedUtc, Status FROM Snapshots WHERE Status = 'Complete' ORDER BY SnapshotDate DESC";
                 using (var reader = command.ExecuteReader())
                 {
                     while (reader.Read())
                     {
-                        list.Add(new BackupFile
+                        list.Add(new Snapshot
+                        {
+                            Id = reader.GetInt32(0),
+                            SnapshotDate = DateTime.Parse(reader.GetString(1)),
+                            StartedUtc = DateTime.Parse(reader.GetString(2)),
+                            CompletedUtc = reader.IsDBNull(3) ? null : DateTime.Parse(reader.GetString(3)),
+                            Status = SnapshotStatus.Complete
+                        });
+                    }
+                }
+            }
+            return list;
+        }
+
+        public List<(BackupFile file, FileVersion version)> GetFilesAtSnapshot(int snapshotId)
+        {
+            var list = new List<(BackupFile file, FileVersion version)>();
+            using (var command = _connection.CreateCommand())
+            {
+                command.CommandText = @"
+                    SELECT f.Id, f.SourcePath, f.NormalizedPath,
+                           fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType
+                    FROM Files f
+                    JOIN FileVersions fv ON f.Id = fv.FileId
+                    WHERE fv.Id = (
+                        SELECT Id
+                        FROM FileVersions
+                        WHERE FileId = f.Id AND SnapshotId <= @snapId
+                        ORDER BY SnapshotId DESC
+                        LIMIT 1
+                    )
+                    AND fv.ChangeType != 'Deleted'";
+
+                command.Parameters.AddWithValue("@snapId", snapshotId);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var file = new BackupFile
                         {
                             Id = reader.GetInt32(0),
                             SourcePath = reader.GetString(1),
                             NormalizedPath = reader.GetString(2)
-                        });
+                        };
+
+                        string dateStr = reader.GetString(8);
+                        DateTime lastWrite;
+                        if (!DateTime.TryParse(dateStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out lastWrite))
+                        {
+                            lastWrite = DateTime.Parse(dateStr);
+                        }
+
+                        var version = new FileVersion
+                        {
+                            Id = reader.GetInt32(3),
+                            FileId = reader.GetInt32(4),
+                            SnapshotId = reader.GetInt32(5),
+                            BackupPath = reader.IsDBNull(6) ? null : reader.GetString(6),
+                            Size = reader.GetInt64(7),
+                            LastWriteUtc = lastWrite,
+                            Hash = reader.IsDBNull(9) ? null : reader.GetString(9),
+                            ChangeType = Enum.Parse<ChangeType>(reader.GetString(10))
+                        };
+
+                        list.Add((file, version));
                     }
                 }
             }
