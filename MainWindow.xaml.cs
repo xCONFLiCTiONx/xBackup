@@ -961,7 +961,7 @@ namespace xBackup
                 catch { }
 
                 // Check if we have an active folder matching today or if we need a new day folder setup
-                string matchedTodayDir = existingSnapshots.Find(x => Path.GetFileName(x).StartsWith("Snapshot_" + todayString));
+                string matchedTodayDir = existingSnapshots.Find(x => Path.GetFileName(x).Equals("Snapshot_" + todayString, StringComparison.OrdinalIgnoreCase));
                 if (!string.IsNullOrEmpty(matchedTodayDir))
                 {
                     activeSnapshotDir = matchedTodayDir;
@@ -969,20 +969,12 @@ namespace xBackup
                 }
                 else
                 {
-                    // Establish sequence number
-                    int nextSeq = 1;
                     if (existingSnapshots.Count > 0)
                     {
                         baselineSnapshotDir = existingSnapshots[existingSnapshots.Count - 1];
-                        string lastDirName = Path.GetFileName(baselineSnapshotDir);
-                        int underscoreIndex = lastDirName.LastIndexOf('_');
-                        if (underscoreIndex != -1 && int.TryParse(lastDirName.Substring(underscoreIndex + 1), out int lastSeq))
-                        {
-                            nextSeq = lastSeq + 1;
-                        }
                     }
 
-                    string newDirName = $"Snapshot_{todayString}_{nextSeq:D2}";
+                    string newDirName = $"Snapshot_{todayString}";
                     activeSnapshotDir = Path.Combine(mountedDrive, newDirName);
                     Directory.CreateDirectory(activeSnapshotDir);
                     AppendLog($"Created high-integrity daily snapshot target folder: {newDirName}", Brushes.DeepSkyBlue);
@@ -1227,7 +1219,7 @@ namespace xBackup
                     foreach (var snapDir in snapshotDirs)
                     {
                         string dirName = Path.GetFileName(snapDir);
-                        // Extract date pattern: Snapshot_yyyy-MM-dd_NN
+                        // Extract date pattern: Snapshot_yyyy-MM-dd
                         if (dirName.Length >= 19 && dirName.StartsWith("Snapshot_"))
                         {
                             string datePart = dirName.Substring(9, 10);
