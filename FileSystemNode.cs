@@ -95,35 +95,44 @@ namespace xBackup
                 Children.Clear();
                 try
                 {
-                    string[] dirs = Directory.GetDirectories(FullPath);
-                    Array.Sort(dirs);
-                    foreach (var dir in dirs)
+                    DirectoryInfo di = new DirectoryInfo(FullPath);
+
+                    // Load Directories
+                    foreach (var dirInfo in di.GetDirectories())
                     {
-                        var dirName = Path.GetFileName(dir);
+                        // Skip junctions/reparse points to avoid infinite recursion loops (e.g., "Application Data" loops)
+                        // This addresses the "showing folders in places it shouldn't" issue.
+                        if (dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+
+                        // Skip default excluded junk folders entirely from the view to keep the tree clean
+                        // This addresses the "seeing some of your filtering" issue.
+                        if (GlobalExclusions.IsDefaultExcluded(dirInfo.FullName)) continue;
+
                         var child = new FileSystemNode
                         {
-                            Name = dirName,
-                            FullPath = dir,
+                            Name = dirInfo.Name,
+                            FullPath = dirInfo.FullName,
                             IsDirectory = true,
                             Parent = this
                         };
                         child.InitializeState();
-                        if (HasSubItems(dir))
+                        if (HasSubItems(dirInfo.FullName))
                         {
                             child.Children.Add(new FileSystemNode { Name = "Loading..." });
                         }
                         Children.Add(child);
                     }
 
-                    string[] files = Directory.GetFiles(FullPath);
-                    Array.Sort(files);
-                    foreach (var file in files)
+                    // Load Files
+                    foreach (var fileInfo in di.GetFiles())
                     {
-                        var fileName = Path.GetFileName(file);
+                        // Skip default excluded files
+                        if (GlobalExclusions.IsDefaultExcluded(fileInfo.FullName)) continue;
+
                         var child = new FileSystemNode
                         {
-                            Name = fileName,
-                            FullPath = file,
+                            Name = fileInfo.Name,
+                            FullPath = fileInfo.FullName,
                             IsDirectory = false,
                             Parent = this
                         };

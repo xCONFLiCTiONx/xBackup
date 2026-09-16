@@ -1214,6 +1214,15 @@ for ($i = 0; $i -lt 20; $i++) {{
         private void DiscoverFilesRecursively(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Skip reparse points (junctions/symlinks) to avoid infinite recursion loops and redundant data
+            try
+            {
+                var dirInfo = new DirectoryInfo(currentDir);
+                if (dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint)) return;
+            }
+            catch { return; }
+
             if (IsPathExcluded(currentDir)) return;
 
             try
@@ -1223,6 +1232,16 @@ for ($i = 0; $i -lt 20; $i++) {{
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     scannedCount++;
+
+                    try
+                    {
+                        var fi = new FileInfo(f);
+                        // Skip system/hidden files and reparse points in discovery
+                        if (fi.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                        if (fi.Attributes.HasFlag(FileAttributes.Hidden) || fi.Attributes.HasFlag(FileAttributes.System)) continue;
+                    }
+                    catch { continue; }
+
                     if (!IsPathExcluded(f))
                     {
                         files.Add(f);

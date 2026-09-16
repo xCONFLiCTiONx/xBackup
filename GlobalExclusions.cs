@@ -135,11 +135,19 @@ namespace xBackup
                     return true;
             }
 
-            // 3. Check for specific path patterns (prefixes/substrings)
+            // 3. Check for specific path patterns (ensure we match whole segments)
             foreach (var pattern in _excludedPathSegments)
             {
-                if (lower.Contains(pattern))
-                    return true;
+                int index = lower.IndexOf(pattern);
+                if (index != -1)
+                {
+                    // Check if the match is at the end of the string or followed by a separator
+                    int end = index + pattern.Length;
+                    if (end == lower.Length || lower[end] == '\\' || lower[end] == '/')
+                    {
+                        return true;
+                    }
+                }
             }
 
             return false;
