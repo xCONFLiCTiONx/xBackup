@@ -730,13 +730,18 @@ namespace xBackup
 
         private void RunRestoreEngine(string snapshotPath, string targetPath, bool overwrite, System.Threading.CancellationToken cancellationToken)
         {
+            List<string> filesToRestore = new List<string>();
+            long restoredCount = 0;
+            long skippedCount = 0;
+            long errorCount = 0;
+            long totalBytesRestored = 0;
+
             try
             {
                 SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
                 AppendLog("Initializing Restore Lifecycle...", Brushes.DeepSkyBlue);
 
                 _errorDetailsReport.Clear();
-                List<string> filesToRestore = new List<string>();
                 long totalScannedCount = 0;
 
                 AppendLog("Scanning snapshot contents...", Brushes.DeepSkyBlue);
@@ -748,11 +753,6 @@ namespace xBackup
                     PrgBar.Maximum = filesToRestore.Count;
                     TxtProgressDetails.Text = $"Found {filesToRestore.Count:N0} files to restore.";
                 });
-
-                long restoredCount = 0;
-                long skippedCount = 0;
-                long errorCount = 0;
-                long totalBytesRestored = 0;
 
                 for (int i = 0; i < filesToRestore.Count; i++)
                 {
@@ -818,65 +818,11 @@ namespace xBackup
                 }
 
                 AppendLog("----------------------------------------------------------------", Brushes.Gray);
-                AppendLog($"Restore execution completed.", Brushes.DeepSkyBlue);
-                AppendLog($"Successfully Restored: {restoredCount:N0} files.", Brushes.LightGreen);
-                AppendLog($"Skipped (Existing): {skippedCount:N0} files.", Brushes.Gray);
-                AppendLog($"Errors encountered: {errorCount:N0} files.", Brushes.Yellow);
-
-                try
-                {
-                    string historyDir = Path.Combine(targetPath, "RestoreLogs");
-                    if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
-
-                    string logFileName = $"RestoreReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
-                    string fullLogPath = Path.Combine(historyDir, logFileName);
-
-                    using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
-                    {
-                        sw.WriteLine("==========================================================================");
-                        sw.WriteLine($"PERSONAL BACKUP ENGINE RESTORE EXECUTION REPORT");
-                        sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-                        sw.WriteLine("==========================================================================");
-                        sw.WriteLine($"Snapshot Path: {snapshotPath}");
-                        sw.WriteLine($"Restore Path:  {targetPath}");
-                        sw.WriteLine($"Overwrite:     {overwrite}");
-                        sw.WriteLine("--------------------------------------------------------------------------");
-                        sw.WriteLine($"Total Files Scanned in Snapshot: {filesToRestore.Count:N0}");
-                        sw.WriteLine($"Successfully Restored:           {restoredCount:N0}");
-                        sw.WriteLine($"Skipped (Existing):              {skippedCount:N0}");
-                        sw.WriteLine($"Errors encountered:              {errorCount:N0}");
-                        sw.WriteLine($"Total Sizing Restored:           {FormatBytes(totalBytesRestored)}");
-                        sw.WriteLine("==========================================================================");
-
-                        if (_errorDetailsReport.Count > 0)
-                        {
-                            sw.WriteLine();
-                            sw.WriteLine("RESTORE ERRORS / BYPASSED FILES DETAILS:");
-                            sw.WriteLine("--------------------------------------------------------------------------");
-                            foreach (var errItem in _errorDetailsReport)
-                            {
-                                sw.WriteLine(errItem);
-                            }
-                        }
-                    }
-                    AppendLog($"Restore session report saved: RestoreLogs\\{logFileName}", Brushes.LightSeaGreen);
-                }
-                catch (Exception historyEx)
-                {
-                    AppendLog($"Warning: Could not compile restore log file ({historyEx.Message})", Brushes.Orange);
-                }
-
-                Dispatcher.Invoke(() =>
-                {
-                    TxtProgressDetails.Text = "Restore Complete!";
-                    LblBackedUp.Text = restoredCount.ToString("N0");
-                    LblUpToDate.Text = skippedCount.ToString("N0");
-                    LblLocked.Text = errorCount.ToString("N0");
-                    LblSavings.Text = FormatBytes(totalBytesRestored);
-                });
+                AppendLog($"Restore execution status updated.", Brushes.DeepSkyBlue);
             }
             catch (OperationCanceledException)
             {
+                AppendLog("Restore operation was cancelled by the user.", Brushes.Orange);
                 throw;
             }
             catch (Exception ex)
@@ -885,8 +831,64 @@ namespace xBackup
             }
             finally
             {
+                WriteRestoreReport(snapshotPath, targetPath, overwrite, filesToRestore.Count, restoredCount, skippedCount, errorCount, totalBytesRestored);
                 SetThreadExecutionState(ES_CONTINUOUS);
             }
+        }
+
+        private void WriteRestoreReport(string snapshotPath, string targetPath, bool overwrite, long totalScannedCount, long restoredCount, long skippedCount, long errorCount, long totalBytesRestored)
+        {
+            try
+            {
+                string historyDir = Path.Combine(targetPath, "RestoreLogs");
+                if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
+
+                string logFileName = $"RestoreReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
+                string fullLogPath = Path.Combine(historyDir, logFileName);
+
+                using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
+                {
+                    sw.WriteLine("==========================================================================");
+                    sw.WriteLine($"PERSONAL BACKUP ENGINE RESTORE EXECUTION REPORT");
+                    sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                    sw.WriteLine("==========================================================================");
+                    sw.WriteLine($"Snapshot Path: {snapshotPath}");
+                    sw.WriteLine($"Restore Path:  {targetPath}");
+                    sw.WriteLine($"Overwrite:     {overwrite}");
+                    sw.WriteLine("--------------------------------------------------------------------------");
+                    sw.WriteLine($"Total Files Scanned in Snapshot: {totalScannedCount:N0}");
+                    sw.WriteLine($"Successfully Restored:           {restoredCount:N0}");
+                    sw.WriteLine($"Skipped (Existing):              {skippedCount:N0}");
+                    sw.WriteLine($"Errors encountered:              {errorCount:N0}");
+                    sw.WriteLine($"Total Sizing Restored:           {FormatBytes(totalBytesRestored)}");
+                    sw.WriteLine("==========================================================================");
+
+                    if (_errorDetailsReport.Count > 0)
+                    {
+                        sw.WriteLine();
+                        sw.WriteLine("RESTORE ERRORS / BYPASSED FILES DETAILS:");
+                        sw.WriteLine("--------------------------------------------------------------------------");
+                        foreach (var errItem in _errorDetailsReport)
+                        {
+                            sw.WriteLine(errItem);
+                        }
+                    }
+                }
+                AppendLog($"Restore session report saved: RestoreLogs\\{logFileName}", Brushes.LightSeaGreen);
+            }
+            catch (Exception historyEx)
+            {
+                AppendLog($"Warning: Could not compile restore log file ({historyEx.Message})", Brushes.Orange);
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                TxtProgressDetails.Text = "Restore Operation Finished";
+                LblBackedUp.Text = restoredCount.ToString("N0");
+                LblUpToDate.Text = skippedCount.ToString("N0");
+                LblLocked.Text = errorCount.ToString("N0");
+                LblSavings.Text = FormatBytes(totalBytesRestored);
+            });
         }
 
         private void DiscoverFilesForRestore(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
@@ -917,6 +919,14 @@ namespace xBackup
             string vhdxPath = Path.Combine(destRoot, "BackupDev.vhdx");
             string mountedDrive = string.Empty;
             bool newlyMounted = false;
+
+            List<string> filesToProcess = new List<string>();
+            long backedUpCount = checkpoint?.BackedUpCount ?? 0;
+            long upToDateCount = checkpoint?.UpToDateCount ?? 0;
+            long lockedCount = checkpoint?.LockedCount ?? 0;
+            long totalBytesMirrored = checkpoint?.TotalBytesMirrored ?? 0;
+            long purgedFilesCount = 0;
+            long purgedDirsCount = 0;
 
             try
             {
@@ -982,7 +992,6 @@ namespace xBackup
 
                 _errorDetailsReport.Clear();
 
-                List<string> filesToProcess;
                 long totalScannedCount = 0;
 
                 if (checkpoint != null)
@@ -993,7 +1002,6 @@ namespace xBackup
                 else
                 {
                     AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
-                    filesToProcess = new List<string>();
 
                     var sourcePaths = new List<string>(GlobalExclusions.SelectedDrives);
 
@@ -1015,11 +1023,6 @@ namespace xBackup
                     LblScanned.Text = filesToProcess.Count.ToString("N0");
                     PrgBar.Maximum = filesToProcess.Count;
                 });
-
-                long backedUpCount = checkpoint?.BackedUpCount ?? 0;
-                long upToDateCount = checkpoint?.UpToDateCount ?? 0;
-                long lockedCount = checkpoint?.LockedCount ?? 0;
-                long totalBytesMirrored = checkpoint?.TotalBytesMirrored ?? 0;
 
                 int startIndex = checkpoint?.CurrentIndex ?? 0;
 
@@ -1180,8 +1183,6 @@ namespace xBackup
                 DeleteCheckpoint();
 
                 // --- Purge Phase (File Deletions inside Today's Active Snapshot Bucket) ---
-                long purgedFilesCount = 0;
-                long purgedDirsCount = 0;
                 try
                 {
                     AppendLog("Commencing deletion/purge phase for removed files...", Brushes.DeepSkyBlue);
@@ -1248,70 +1249,8 @@ namespace xBackup
                     AppendLog($"Warning: History retention processing encountered layout issues ({rentEx.Message})", Brushes.Orange);
                 }
 
-                try
-                {
-                    string historyDir = Path.Combine(destRoot, "BackupHistoryLogs");
-                    if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
-
-                    string logFileName = $"BackupReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
-                    string fullLogPath = Path.Combine(historyDir, logFileName);
-
-                    using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
-                    {
-                        sw.WriteLine("==========================================================================");
-                        sw.WriteLine($"PERSONAL BACKUP ENGINE HISTORICAL EXECUTION REPORT (VHDX MIRROR)");
-                        sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-                        sw.WriteLine("==========================================================================");
-                        sw.WriteLine($"Total Files Scanned on C Drive Scope: {filesToProcess.Count:N0}");
-                        sw.WriteLine($"Successfully Mirrored / Copied     : {backedUpCount:N0}");
-                        sw.WriteLine($"Up-to-Date (Skipped Unchanged)     : {upToDateCount:N0}");
-                        sw.WriteLine($"Locked / Bypassed System Files      : {lockedCount:N0}");
-                        sw.WriteLine($"Files Purged / Cleaned Up          : {purgedFilesCount:N0}");
-                        sw.WriteLine($"Directories Purged / Cleaned Up    : {purgedDirsCount:N0}");
-                        sw.WriteLine($"Total Sizing Streamed This Session : {FormatBytes(totalBytesMirrored)}");
-                        sw.WriteLine("==========================================================================");
-
-                        if (_errorDetailsReport.Count > 0)
-                        {
-                            sw.WriteLine();
-                            sw.WriteLine("BYPASSED FILES REPORT SUMMARY DETAILS (ACCESS-LOCKED / PROTECTED):");
-                            sw.WriteLine("--------------------------------------------------------------------------");
-                            foreach (var errItem in _errorDetailsReport)
-                            {
-                                sw.WriteLine(errItem);
-                            }
-                        }
-                        else
-                        {
-                            sw.WriteLine();
-                            sw.WriteLine("Status: High-integrity run. 100% of scanned files backed up without locks.");
-                        }
-                    }
-                    AppendLog($"Historical summary session report saved: BackupHistoryLogs\\{logFileName}", Brushes.LightSeaGreen);
-                }
-                catch (Exception historyEx)
-                {
-                    AppendLog($"Warning: Could not compile historical log file ({historyEx.Message})", Brushes.Orange);
-                }
-
                 AppendLog("----------------------------------------------------------------", Brushes.Gray);
-                AppendLog($"Backup execution completed cleanly.", Brushes.DeepSkyBlue);
-                AppendLog($"Successfully Mirrored: {backedUpCount:N0} files.", Brushes.LightGreen);
-                AppendLog($"Unchanged files kept: {upToDateCount:N0} files.", Brushes.Gray);
-                AppendLog($"Locked files bypassed: {lockedCount:N0} files.", Brushes.Yellow);
-                if (purgedFilesCount > 0 || purgedDirsCount > 0)
-                {
-                    AppendLog($"Purged/Deleted from Backup: {purgedFilesCount:N0} files and {purgedDirsCount:N0} dirs.", Brushes.LightGreen);
-                }
-
-                Dispatcher.Invoke(() =>
-                {
-                    TxtProgressDetails.Text = "Backup Complete!";
-                    LblBackedUp.Text = backedUpCount.ToString("N0");
-                    LblUpToDate.Text = upToDateCount.ToString("N0");
-                    LblLocked.Text = lockedCount.ToString("N0");
-                    LblSavings.Text = FormatBytes(totalBytesMirrored);
-                });
+                AppendLog($"Backup execution cycle finished.", Brushes.DeepSkyBlue);
             }
             catch (OperationCanceledException)
             {
@@ -1323,6 +1262,8 @@ namespace xBackup
             }
             finally
             {
+                WriteBackupReport(destRoot, filesToProcess != null ? filesToProcess.Count : 0, backedUpCount, upToDateCount, lockedCount, purgedFilesCount, purgedDirsCount, totalBytesMirrored);
+
                 if (newlyMounted)
                 {
                     try
@@ -1343,6 +1284,64 @@ namespace xBackup
                 }
                 SetThreadExecutionState(ES_CONTINUOUS);
             }
+        }
+
+        private void WriteBackupReport(string destRoot, long totalScannedCount, long backedUpCount, long upToDateCount, long lockedCount, long purgedFilesCount, long purgedDirsCount, long totalBytesMirrored)
+        {
+            try
+            {
+                string historyDir = Path.Combine(destRoot, "BackupHistoryLogs");
+                if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
+
+                string logFileName = $"BackupReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
+                string fullLogPath = Path.Combine(historyDir, logFileName);
+
+                using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
+                {
+                    sw.WriteLine("==========================================================================");
+                    sw.WriteLine($"PERSONAL BACKUP ENGINE HISTORICAL EXECUTION REPORT (VHDX MIRROR)");
+                    sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                    sw.WriteLine("==========================================================================");
+                    sw.WriteLine($"Total Files Scanned:               {totalScannedCount:N0}");
+                    sw.WriteLine($"Successfully Mirrored / Copied     : {backedUpCount:N0}");
+                    sw.WriteLine($"Up-to-Date (Skipped Unchanged)     : {upToDateCount:N0}");
+                    sw.WriteLine($"Locked / Bypassed System Files      : {lockedCount:N0}");
+                    sw.WriteLine($"Files Purged / Cleaned Up          : {purgedFilesCount:N0}");
+                    sw.WriteLine($"Directories Purged / Cleaned Up    : {purgedDirsCount:N0}");
+                    sw.WriteLine($"Total Sizing Streamed This Session : {FormatBytes(totalBytesMirrored)}");
+                    sw.WriteLine("==========================================================================");
+
+                    if (_errorDetailsReport.Count > 0)
+                    {
+                        sw.WriteLine();
+                        sw.WriteLine("BYPASSED FILES REPORT SUMMARY DETAILS (ACCESS-LOCKED / PROTECTED):");
+                        sw.WriteLine("--------------------------------------------------------------------------");
+                        foreach (var errItem in _errorDetailsReport)
+                        {
+                            sw.WriteLine(errItem);
+                        }
+                    }
+                    else
+                    {
+                        sw.WriteLine();
+                        sw.WriteLine("Status: High-integrity run. 100% of scanned files backed up without locks.");
+                    }
+                }
+                AppendLog($"Historical summary session report saved: BackupHistoryLogs\\{logFileName}", Brushes.LightSeaGreen);
+            }
+            catch (Exception historyEx)
+            {
+                AppendLog($"Warning: Could not compile historical log file ({historyEx.Message})", Brushes.Orange);
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                TxtProgressDetails.Text = "Backup Operation Finished";
+                LblBackedUp.Text = backedUpCount.ToString("N0");
+                LblUpToDate.Text = upToDateCount.ToString("N0");
+                LblLocked.Text = lockedCount.ToString("N0");
+                LblSavings.Text = FormatBytes(totalBytesMirrored);
+            });
         }
 
         private void EnsureVhdxExists(string vhdxPath)
@@ -1704,7 +1703,6 @@ for ($i = 0; $i -lt 20; $i++) {{
             string lower = fullPath.ToLower();
 
             if (GlobalExclusions.IsCustomExcluded(lower)) return true;
-            if (GlobalExclusions.IsDefaultExcluded(fullPath)) return true;
 
             return false;
         }

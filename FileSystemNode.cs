@@ -100,15 +100,6 @@ namespace xBackup
                     // Load Directories
                     foreach (var dirInfo in di.GetDirectories())
                     {
-                        // Skip junctions/reparse points to avoid infinite recursion loops (e.g., "Application Data" loops)
-                        // EXCEPTION: Allow "All Users" as requested by user, even though it's a junction
-                        bool isAllUsers = dirInfo.FullName.Equals(@"C:\Users\All Users", StringComparison.OrdinalIgnoreCase);
-
-                        if (dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint) && !isAllUsers) continue;
-
-                        // Skip default excluded junk folders entirely from the view to keep the tree clean
-                        if (GlobalExclusions.IsDefaultExcluded(dirInfo.FullName)) continue;
-
                         var child = new FileSystemNode
                         {
                             Name = dirInfo.Name,
@@ -127,9 +118,6 @@ namespace xBackup
                     // Load Files
                     foreach (var fileInfo in di.GetFiles())
                     {
-                        // Skip default excluded files
-                        if (GlobalExclusions.IsDefaultExcluded(fileInfo.FullName)) continue;
-
                         var child = new FileSystemNode
                         {
                             Name = fileInfo.Name,
