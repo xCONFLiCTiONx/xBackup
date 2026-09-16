@@ -47,6 +47,8 @@ namespace xBackup
             @"\system volume information"
         };
 
+        public static int RetentionDays { get; set; } = 90;
+
         private static string GetConfigFilePath(string fileName)
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -100,6 +102,18 @@ namespace xBackup
                         // Default to C: if nothing saved
                         SelectedDrives.Add("C:\\");
                     }
+
+                    // Load Retention Days setting
+                    string retentionPath = GetConfigFilePath("retention_settings.json");
+                    if (File.Exists(retentionPath))
+                    {
+                        string json = File.ReadAllText(retentionPath);
+                        var val = JsonSerializer.Deserialize<int>(json);
+                        if (val > 0)
+                        {
+                            RetentionDays = val;
+                        }
+                    }
                 }
                 catch { }
             }
@@ -122,6 +136,11 @@ namespace xBackup
                     var driveList = new List<string>(SelectedDrives);
                     string driveJson = JsonSerializer.Serialize(driveList, new JsonSerializerOptions { WriteIndented = true });
                     File.WriteAllText(drivesPath, driveJson);
+
+                    // Save Retention Days setting
+                    string retentionPath = GetConfigFilePath("retention_settings.json");
+                    string rentJson = JsonSerializer.Serialize(RetentionDays);
+                    File.WriteAllText(retentionPath, rentJson);
                 }
                 catch { }
             }

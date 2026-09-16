@@ -113,11 +113,20 @@
             </TreeView>
         </Border>
 
-        <!-- Actions Panel -->
+        <!-- Actions Panel & Retention Setting -->
         <Grid Grid.Row="2">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="History Retention:" Foreground="#D4D4D4" VerticalAlignment="Center" FontSize="13" Margin="0,0,8,0"/>
+                <TextBox x:Name="TxtRetentionDays" Width="50" Height="26" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" Background="#111111" Foreground="White" BorderBrush="#555555" BorderThickness="1" FontSize="13" MaxLength="4"/>
+                <TextBlock Text="days" Foreground="#858585" VerticalAlignment="Center" FontSize="13" Margin="6,0,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="BtnCancel" Content="Cancel" Width="100" Height="32" Margin="0,0,10,0" Background="#3E3E42" Foreground="#D4D4D4" BorderBrush="#555555" Click="BtnCancel_Click"/>
-                <Button x:Name="BtnSave" Content="Save Exclusions" Width="140" Height="32" Background="#007ACC" Foreground="White" BorderBrush="Transparent" Click="BtnSave_Click"/>
+                <Button x:Name="BtnSave" Content="Save Settings" Width="140" Height="32" Background="#007ACC" Foreground="White" BorderBrush="Transparent" Click="BtnSave_Click"/>
             </StackPanel>
         </Grid>
     </Grid>

@@ -18,6 +18,9 @@ namespace xBackup
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern uint SetThreadExecutionState(uint esFlags);
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
         private const uint ES_CONTINUOUS = 0x80000000;
         private const uint ES_SYSTEM_REQUIRED = 0x00000001;
         private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
@@ -51,6 +54,12 @@ namespace xBackup
             public event EventHandler? CanExecuteChanged { add { } remove { } }
         }
 
+        public class ScopeDisplayItem
+        {
+            public string DisplayText { get; set; } = string.Empty;
+            public bool IsDrive { get; set; }
+        }
+
         public System.Windows.Input.ICommand ShowWindowCommand { get; }
 
         public MainWindow(bool silentMode)
@@ -71,25 +80,27 @@ namespace xBackup
 
         private void RefreshBackupScopesDisplay()
         {
-            var scopes = new List<string>();
+            var scopes = new List<ScopeDisplayItem>();
 
             if (GlobalExclusions.SelectedDrives.Count == 0)
             {
-                scopes.Add("• No drives selected for backup.");
+                scopes.Add(new ScopeDisplayItem { DisplayText = "No drives selected for backup.", IsDrive = false });
             }
             else
             {
                 foreach (var drive in GlobalExclusions.SelectedDrives)
                 {
-                    scopes.Add($"• Drive {drive}");
-
-                    // Show key inclusions for C: drive to reassure user
-                    if (drive.Equals("C:\\", StringComparison.OrdinalIgnoreCase))
+                    string label = "";
+                    try
                     {
-                        scopes.Add("  -> Users (User Data)");
-                        scopes.Add("  -> ProgramData (Shared App Settings)");
-                        scopes.Add("  -> Users\\All Users (Legacy Shared Data)");
+                        var di = new System.IO.DriveInfo(drive);
+                        label = di.VolumeLabel;
                     }
+                    catch { }
+
+                    string cleanDrive = drive.TrimEnd('\\');
+                    string displayName = string.IsNullOrEmpty(label) ? $"Local Disk ({cleanDrive})" : $"{label} ({cleanDrive})";
+                    scopes.Add(new ScopeDisplayItem { DisplayText = displayName, IsDrive = true });
                 }
             }
 
@@ -643,6 +654,51 @@ namespace xBackup
                 AppendLog($"VHDX dynamically attached onto drive {mountedDrive}", Brushes.LightGreen);
                 Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Collapsed);
 
+                // --- Establish Snapshot Target Architecture ---
+                string todayString = DateTime.Today.ToString("yyyy-MM-dd");
+                string activeSnapshotDir = string.Empty;
+                string? baselineSnapshotDir = null;
+
+                // Look for existing snapshot folder matches on the mounted drive to resolve base history
+                var existingSnapshots = new List<string>();
+                try
+                {
+                    foreach (var d in Directory.GetDirectories(mountedDrive, "Snapshot_*"))
+                    {
+                        existingSnapshots.Add(d);
+                    }
+                    existingSnapshots.Sort(); // Sequential dates ordering
+                }
+                catch { }
+
+                // Check if we have an active folder matching today or if we need a new day folder setup
+                string matchedTodayDir = existingSnapshots.Find(x => Path.GetFileName(x).StartsWith("Snapshot_" + todayString));
+                if (!string.IsNullOrEmpty(matchedTodayDir))
+                {
+                    activeSnapshotDir = matchedTodayDir;
+                    AppendLog($"Resuming incremental updates inside today's active folder bucket: {Path.GetFileName(activeSnapshotDir)}", Brushes.LightGreen);
+                }
+                else
+                {
+                    // Establish sequence number
+                    int nextSeq = 1;
+                    if (existingSnapshots.Count > 0)
+                    {
+                        baselineSnapshotDir = existingSnapshots[existingSnapshots.Count - 1];
+                        string lastDirName = Path.GetFileName(baselineSnapshotDir);
+                        int underscoreIndex = lastDirName.LastIndexOf('_');
+                        if (underscoreIndex != -1 && int.TryParse(lastDirName.Substring(underscoreIndex + 1), out int lastSeq))
+                        {
+                            nextSeq = lastSeq + 1;
+                        }
+                    }
+
+                    string newDirName = $"Snapshot_{todayString}_{nextSeq:D2}";
+                    activeSnapshotDir = Path.Combine(mountedDrive, newDirName);
+                    Directory.CreateDirectory(activeSnapshotDir);
+                    AppendLog($"Created high-integrity daily snapshot target folder: {newDirName}", Brushes.DeepSkyBlue);
+                }
+
                 _errorDetailsReport.Clear();
 
                 List<string> filesToProcess;
@@ -739,7 +795,7 @@ namespace xBackup
                     }
 
                     string relativeStructurePath = MapToBackupPath(file);
-                    string destFilePath = Path.Combine(mountedDrive, relativeStructurePath);
+                    string destFilePath = Path.Combine(activeSnapshotDir, relativeStructurePath);
 
                     bool needsCopy = true;
                     try
@@ -750,6 +806,30 @@ namespace xBackup
                             if (destFi.Length == sourceFi.Length && destFi.LastWriteTimeUtc == sourceFi.LastWriteTimeUtc)
                             {
                                 needsCopy = false;
+                            }
+                        }
+                        else if (baselineSnapshotDir != null)
+                        {
+                            // Check if file exists identical in prior base snapshot folder to make a zero-byte hardlink pointer reference
+                            string baselineFilePath = Path.Combine(baselineSnapshotDir, relativeStructurePath);
+                            if (File.Exists(baselineFilePath))
+                            {
+                                var baseFi = new FileInfo(baselineFilePath);
+                                if (baseFi.Length == sourceFi.Length && baseFi.LastWriteTimeUtc == sourceFi.LastWriteTimeUtc)
+                                {
+                                    string? parentDir = Path.GetDirectoryName(destFilePath);
+                                    if (parentDir != null && !Directory.Exists(parentDir))
+                                    {
+                                        Directory.CreateDirectory(parentDir);
+                                    }
+
+                                    if (CreateHardLink(destFilePath, baselineFilePath, IntPtr.Zero))
+                                    {
+                                        needsCopy = false;
+                                        upToDateCount++;
+                                        continue;
+                                    }
+                                }
                             }
                         }
                     }
@@ -792,7 +872,7 @@ namespace xBackup
 
                         if (backedUpCount <= 100 || sourceFi.Length > 50 * 1024 * 1024)
                         {
-                            AppendLog($"[Mirror] Copied & Verified: {sourceFi.Name} ({FormatBytes(sourceFi.Length)})", Brushes.LightGreen);
+                            AppendLog($"[Snapshot] Streamed & Linked: {sourceFi.Name} ({FormatBytes(sourceFi.Length)})", Brushes.LightGreen);
                         }
                     }
                     catch (Exception ex)
@@ -818,7 +898,7 @@ namespace xBackup
                 // If we finished successfully, delete the checkpoint
                 DeleteCheckpoint();
 
-                // --- Purge Phase (File Deletions) ---
+                // --- Purge Phase (File Deletions inside Today's Active Snapshot Bucket) ---
                 long purgedFilesCount = 0;
                 long purgedDirsCount = 0;
                 try
@@ -828,7 +908,7 @@ namespace xBackup
                     foreach (var sourceRoot in sourcePaths)
                     {
                         string driveFolder = MapToBackupPath(sourceRoot);
-                        string destRootFolder = Path.Combine(mountedDrive, driveFolder);
+                        string destRootFolder = Path.Combine(activeSnapshotDir, driveFolder);
 
                         if (Directory.Exists(destRootFolder))
                         {
@@ -837,16 +917,54 @@ namespace xBackup
                     }
                     if (purgedFilesCount > 0 || purgedDirsCount > 0)
                     {
-                        AppendLog($"Purge complete. Removed {purgedFilesCount:N0} files and {purgedDirsCount:N0} directories from backup that no longer exist in source.", Brushes.LightGreen);
+                        AppendLog($"Purge complete. Removed {purgedFilesCount:N0} files and {purgedDirsCount:N0} directories from active snapshot bucket that no longer exist in source.", Brushes.LightGreen);
                     }
                     else
                     {
-                        AppendLog("Purge phase complete. Destination is fully synchronized (no orphan files found).", Brushes.Gray);
+                        AppendLog("Purge phase complete. Snapshot layout matches source definitions cleanly.", Brushes.Gray);
                     }
                 }
                 catch (Exception purgeEx)
                 {
                     AppendLog($"Warning: Purge phase encountered an error ({purgeEx.Message})", Brushes.Orange);
+                }
+
+                // --- History Retention Window Pruning Step ---
+                try
+                {
+                    AppendLog($"Evaluating history retention policy rules ({GlobalExclusions.RetentionDays} days maximum limit)...", Brushes.DeepSkyBlue);
+                    var snapshotDirs = Directory.GetDirectories(mountedDrive, "Snapshot_*");
+                    int prunedFoldersCount = 0;
+                    foreach (var snapDir in snapshotDirs)
+                    {
+                        string dirName = Path.GetFileName(snapDir);
+                        // Extract date pattern: Snapshot_yyyy-MM-dd_NN
+                        if (dirName.Length >= 19 && dirName.StartsWith("Snapshot_"))
+                        {
+                            string datePart = dirName.Substring(9, 10);
+                            if (DateTime.TryParseExact(datePart, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime snapDate))
+                            {
+                                if ((DateTime.Today - snapDate).TotalDays > GlobalExclusions.RetentionDays)
+                                {
+                                    AppendLog($"Pruning expired historical data snapshot bucket: {dirName}", Brushes.Orange);
+                                    Directory.Delete(snapDir, true);
+                                    prunedFoldersCount++;
+                                }
+                            }
+                        }
+                    }
+                    if (prunedFoldersCount > 0)
+                    {
+                        AppendLog($"Retention cycle complete. Automatically discarded {prunedFoldersCount} expired snapshot timelines from disk space.", Brushes.LightGreen);
+                    }
+                    else
+                    {
+                        AppendLog("Retention check complete. All timeline assets are within valid history specifications.", Brushes.Gray);
+                    }
+                }
+                catch (Exception rentEx)
+                {
+                    AppendLog($"Warning: History retention processing encountered layout issues ({rentEx.Message})", Brushes.Orange);
                 }
 
                 try

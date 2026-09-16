@@ -11,6 +11,7 @@ namespace xBackup
         {
             InitializeComponent();
             LoadRootNodes();
+            TxtRetentionDays.Text = GlobalExclusions.RetentionDays.ToString();
         }
 
         private void LoadRootNodes()
@@ -74,9 +75,19 @@ namespace xBackup
                     GlobalExclusions.SelectedDrives.Add(drive);
                 }
 
+                if (int.TryParse(TxtRetentionDays.Text, out int rentDays) && rentDays > 0)
+                {
+                    GlobalExclusions.RetentionDays = rentDays;
+                }
+                else
+                {
+                    MessageBox.Show("Please enter a valid number of days for history retention (minimum 1).", "Invalid Setting", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
                 GlobalExclusions.Save();
 
-                MessageBox.Show("Custom backup exclusions updated and saved successfully.", "Exclusions Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("Backup settings and exclusions updated and saved successfully.", "Settings Saved", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }
             catch (Exception ex)
