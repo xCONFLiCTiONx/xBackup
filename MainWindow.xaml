@@ -246,8 +246,8 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="TxtDestRoot" Text="F:\Backup\Home-PC" Background="#1E1E1E" Foreground="#D4D4D4" BorderBrush="#3E3E42" Padding="5" VerticalAlignment="Center"/>
-                        <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="30" Margin="5,0,0,0" Background="#3E3E42" Click="BtnBrowseDest_Click"/>
+                        <TextBox x:Name="TxtDestRoot" Text="F:\Backup\Home-PC" Background="#1E1E1E" Foreground="#D4D4D4" BorderBrush="#3E3E42" Padding="6" VerticalAlignment="Center"/>
+                        <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="32" Height="30" Padding="0" Margin="5,0,0,0" Background="#3E3E42" Click="BtnBrowseDest_Click" VerticalAlignment="Center"/>
                     </Grid>
 
                     <TextBlock Text="Mount Target Drive Letter Allocation:" FontSize="11" Foreground="#858585" Margin="0,0,0,4"/>
