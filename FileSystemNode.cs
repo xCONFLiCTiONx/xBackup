@@ -68,6 +68,10 @@ namespace xBackup
 
         public void VerifyCheckState()
         {
+            // If children are not loaded yet or the folder is empty, don't attempt to calculate state from them.
+            // This prevents folders with Access Denied or empty directories from flipping to Indeterminate/Unchecked.
+            if (Children.Count == 0 || (Children.Count == 1 && Children[0].Name == "Loading...")) return;
+
             bool? state = null;
             bool first = true;
             foreach (var child in Children)
@@ -84,7 +88,11 @@ namespace xBackup
                     break;
                 }
             }
-            SetIsChecked(state, false, true);
+
+            if (!first)
+            {
+                SetIsChecked(state, false, true);
+            }
         }
 
         public void LoadChildren()
@@ -197,13 +205,19 @@ namespace xBackup
             // 5. Otherwise inherit from parent
             if (Parent != null)
             {
-                if (Parent.IsChecked == true && GlobalExclusions.HasCustomExcludedChildren(FullPath))
+                // Fix: If the parent is Indeterminate (null), it means some parts of the parent are excluded.
+                // However, a newly loaded child should default to 'true' (Included) unless it's explicitly in the exclusion list.
+                // This prevents the 'Indeterminate' state of the Drive Root (caused by Windows/Program Files exclusions)
+                // from cascading down to every other folder on the drive.
+                bool? parentState = Parent.IsChecked ?? true;
+
+                if (parentState == true && GlobalExclusions.HasCustomExcludedChildren(FullPath))
                 {
                     _isChecked = null;
                 }
                 else
                 {
-                    _isChecked = Parent.IsChecked;
+                    _isChecked = parentState;
                 }
             }
         }
