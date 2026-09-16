@@ -101,11 +101,12 @@ namespace xBackup
                     foreach (var dirInfo in di.GetDirectories())
                     {
                         // Skip junctions/reparse points to avoid infinite recursion loops (e.g., "Application Data" loops)
-                        // This addresses the "showing folders in places it shouldn't" issue.
-                        if (dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                        // EXCEPTION: Allow "All Users" as requested by user, even though it's a junction
+                        bool isAllUsers = dirInfo.FullName.Equals(@"C:\Users\All Users", StringComparison.OrdinalIgnoreCase);
+
+                        if (dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint) && !isAllUsers) continue;
 
                         // Skip default excluded junk folders entirely from the view to keep the tree clean
-                        // This addresses the "seeing some of your filtering" issue.
                         if (GlobalExclusions.IsDefaultExcluded(dirInfo.FullName)) continue;
 
                         var child = new FileSystemNode
@@ -160,17 +161,40 @@ namespace xBackup
 
         public void InitializeState()
         {
-            if (GlobalExclusions.IsDefaultExcluded(FullPath) || GlobalExclusions.CustomExcludedPaths.Contains(FullPath.ToLower()))
+            string lower = FullPath.ToLowerInvariant();
+
+            // 1. Check if explicitly custom excluded
+            if (GlobalExclusions.CustomExcludedPaths.Contains(lower))
             {
                 _isChecked = false;
+                return;
             }
-            else if (Parent != null && Parent.IsChecked == false)
+
+            // 2. Drive Roots are checked if in SelectedDrives
+            if (FullPath.Length <= 3 && FullPath.Contains(":\\"))
+            {
+                _isChecked = GlobalExclusions.SelectedDrives.Contains(FullPath.ToUpperInvariant());
+                return;
+            }
+
+            // 3. Default exclusions (Windows, Program Files, etc.)
+            if (GlobalExclusions.IsDefaultExcluded(FullPath))
             {
                 _isChecked = false;
+                return;
             }
-            else if (Parent != null && Parent.IsChecked == true)
+
+            // 4. Special cases for C: drive default inclusions
+            if (lower.StartsWith("c:\\users") || lower.Equals("c:\\programdata"))
             {
                 _isChecked = true;
+                return;
+            }
+
+            // 5. Otherwise inherit from parent
+            if (Parent != null)
+            {
+                _isChecked = Parent.IsChecked;
             }
         }
 

@@ -22,7 +22,6 @@ namespace xBackup
         private const uint ES_SYSTEM_REQUIRED = 0x00000001;
         private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
 
-        private readonly string[] _sourcePaths = new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"C:\ProgramData" };
         private string _destinationRoot = @"F:\Backup\Home-PC";
         private bool _isProcessing = false;
         private bool _isVhdxMountedManual = false;
@@ -59,15 +58,42 @@ namespace xBackup
             _isSilentMode = silentMode;
             ShowWindowCommand = new RelayCommand(RestoreFromTray);
             InitializeComponent();
-            UserProfileTextBlock.Text = "• " + Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             DataContext = this;
 
             // Load saved coordinates from configuration cache if existing
             LoadWindowPlacementSettings();
             GlobalExclusions.Load();
+            RefreshBackupScopesDisplay();
 
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
+        }
+
+        private void RefreshBackupScopesDisplay()
+        {
+            var scopes = new List<string>();
+
+            if (GlobalExclusions.SelectedDrives.Count == 0)
+            {
+                scopes.Add("• No drives selected for backup.");
+            }
+            else
+            {
+                foreach (var drive in GlobalExclusions.SelectedDrives)
+                {
+                    scopes.Add($"• Drive {drive}");
+
+                    // Show key inclusions for C: drive to reassure user
+                    if (drive.Equals("C:\\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        scopes.Add("  -> Users (User Data)");
+                        scopes.Add("  -> ProgramData (Shared App Settings)");
+                        scopes.Add("  -> Users\\All Users (Legacy Shared Data)");
+                    }
+                }
+            }
+
+            ItemsScopes.ItemsSource = scopes;
         }
 
         private void BtnBrowseDest_Click(object sender, RoutedEventArgs e)
@@ -89,6 +115,7 @@ namespace xBackup
         {
             var settingsWin = new SettingsWindow { Owner = this };
             settingsWin.ShowDialog();
+            RefreshBackupScopesDisplay();
         }
 
         private class WindowPlacementData
@@ -630,7 +657,10 @@ namespace xBackup
                 {
                     AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
                     filesToProcess = new List<string>();
-                    foreach (var sourceRoot in _sourcePaths)
+
+                    var sourcePaths = new List<string>(GlobalExclusions.SelectedDrives);
+
+                    foreach (var sourceRoot in sourcePaths)
                     {
                         if (!Directory.Exists(sourceRoot))
                         {
@@ -794,7 +824,8 @@ namespace xBackup
                 try
                 {
                     AppendLog("Commencing deletion/purge phase for removed files...", Brushes.DeepSkyBlue);
-                    foreach (var sourceRoot in _sourcePaths)
+                    var sourcePaths = new List<string>(GlobalExclusions.SelectedDrives);
+                    foreach (var sourceRoot in sourcePaths)
                     {
                         string driveFolder = MapToBackupPath(sourceRoot);
                         string destRootFolder = Path.Combine(mountedDrive, driveFolder);

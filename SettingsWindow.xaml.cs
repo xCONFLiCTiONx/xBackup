@@ -17,39 +17,26 @@ namespace xBackup
         {
             try
             {
-                // 1. User Profile Directory Root
-                string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                if (Directory.Exists(userProfile))
+                DriveInfo[] allDrives = DriveInfo.GetDrives();
+                foreach (DriveInfo d in allDrives)
                 {
-                    var userNode = new FileSystemNode
+                    if (d.DriveType == DriveType.Fixed && d.IsReady)
                     {
-                        Name = $"User Profile ({Path.GetFileName(userProfile)})",
-                        FullPath = userProfile,
-                        IsDirectory = true
-                    };
-                    userNode.InitializeState();
-                    userNode.Children.Add(new FileSystemNode { Name = "Loading..." });
-                    FileTreeView.Items.Add(userNode);
-                }
-
-                // 2. ProgramData Directory Root
-                string programData = @"C:\ProgramData";
-                if (Directory.Exists(programData))
-                {
-                    var progNode = new FileSystemNode
-                    {
-                        Name = "ProgramData (C:\\ProgramData)",
-                        FullPath = programData,
-                        IsDirectory = true
-                    };
-                    progNode.InitializeState();
-                    progNode.Children.Add(new FileSystemNode { Name = "Loading..." });
-                    FileTreeView.Items.Add(progNode);
+                        var driveNode = new FileSystemNode
+                        {
+                            Name = $"Drive {d.Name} ({d.VolumeLabel})",
+                            FullPath = d.Name,
+                            IsDirectory = true
+                        };
+                        driveNode.InitializeState();
+                        driveNode.Children.Add(new FileSystemNode { Name = "Loading..." });
+                        FileTreeView.Items.Add(driveNode);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to initialize file tree structure roots: {ex.Message}", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Failed to initialize drive tree: {ex.Message}", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -63,9 +50,14 @@ namespace xBackup
             try
             {
                 var newExclusions = new HashSet<string>();
+                var selectedDrives = new HashSet<string>();
 
                 foreach (FileSystemNode rootNode in FileTreeView.Items)
                 {
+                    if (rootNode.IsChecked != false)
+                    {
+                        selectedDrives.Add(rootNode.FullPath.ToUpperInvariant());
+                    }
                     CollectExclusionsFromNode(rootNode, newExclusions);
                 }
 
@@ -74,6 +66,12 @@ namespace xBackup
                 foreach (var path in newExclusions)
                 {
                     GlobalExclusions.CustomExcludedPaths.Add(path);
+                }
+
+                GlobalExclusions.SelectedDrives.Clear();
+                foreach (var drive in selectedDrives)
+                {
+                    GlobalExclusions.SelectedDrives.Add(drive);
                 }
 
                 GlobalExclusions.Save();

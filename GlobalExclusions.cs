@@ -9,6 +9,7 @@ namespace xBackup
     {
         private static readonly object _lock = new object();
         public static HashSet<string> CustomExcludedPaths { get; } = new HashSet<string>();
+        public static HashSet<string> SelectedDrives { get; } = new HashSet<string>();
 
         // Pre-optimized sets for fast lookup
         private static readonly HashSet<string> _excludedFolderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -16,7 +17,8 @@ namespace xBackup
             "node_modules", ".vs", ".idea", "target", "bin", "obj", "build", "$recycle.bin",
             "system volume information", "prefetch", "softwaredistribution", "installer",
             "inetcache", "webcache", "dxcache", "d3dscache", "crashrpt", "_cache", "cache",
-            "cacheddata", "code cache", "gpucache", "assetcache"
+            "cacheddata", "code cache", "gpucache", "assetcache", "windows", "program files",
+            "program files (x86)", "recovery", "config.msi", "perflogs", "documents and settings"
         };
 
         private static readonly string[] _excludedPathSegments = new[]
@@ -40,15 +42,17 @@ namespace xBackup
             @"\microsoft.yourphone",
             @"\mobiledeviceconnect",
             @"\phone-link",
-            @"\crossdevice"
+            @"\crossdevice",
+            @"\$recycle.bin",
+            @"\system volume information"
         };
 
-        private static string GetConfigFilePath()
+        private static string GetConfigFilePath(string fileName)
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string folder = Path.Combine(appData, "SmartBackupEngine");
             if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
-            return Path.Combine(folder, "custom_exclusions.json");
+            return Path.Combine(folder, fileName);
         }
 
         public static void Load()
@@ -57,10 +61,11 @@ namespace xBackup
             {
                 try
                 {
-                    string path = GetConfigFilePath();
-                    if (File.Exists(path))
+                    // Load Exclusions
+                    string exclusionPath = GetConfigFilePath("custom_exclusions.json");
+                    if (File.Exists(exclusionPath))
                     {
-                        string json = File.ReadAllText(path);
+                        string json = File.ReadAllText(exclusionPath);
                         var list = JsonSerializer.Deserialize<List<string>>(json);
                         CustomExcludedPaths.Clear();
                         if (list != null)
@@ -74,6 +79,27 @@ namespace xBackup
                             }
                         }
                     }
+
+                    // Load Selected Drives
+                    string drivesPath = GetConfigFilePath("selected_drives.json");
+                    SelectedDrives.Clear();
+                    if (File.Exists(drivesPath))
+                    {
+                        string json = File.ReadAllText(drivesPath);
+                        var list = JsonSerializer.Deserialize<List<string>>(json);
+                        if (list != null)
+                        {
+                            foreach (var drive in list)
+                            {
+                                SelectedDrives.Add(drive.ToUpperInvariant());
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Default to C: if nothing saved
+                        SelectedDrives.Add("C:\\");
+                    }
                 }
                 catch { }
             }
@@ -85,10 +111,17 @@ namespace xBackup
             {
                 try
                 {
-                    string path = GetConfigFilePath();
-                    var list = new List<string>(CustomExcludedPaths);
-                    string json = JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true });
-                    File.WriteAllText(path, json);
+                    // Save Exclusions
+                    string exclusionPath = GetConfigFilePath("custom_exclusions.json");
+                    var exclList = new List<string>(CustomExcludedPaths);
+                    string exclJson = JsonSerializer.Serialize(exclList, new JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(exclusionPath, exclJson);
+
+                    // Save Selected Drives
+                    string drivesPath = GetConfigFilePath("selected_drives.json");
+                    var driveList = new List<string>(SelectedDrives);
+                    string driveJson = JsonSerializer.Serialize(driveList, new JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(drivesPath, driveJson);
                 }
                 catch { }
             }
