@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
 using xBackup.Models;
@@ -27,6 +28,9 @@ namespace xBackup
         private const uint ES_SYSTEM_REQUIRED = 0x00000001;
         private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
 
+        private string? _currentFilePath;
+        private static readonly Brush LinkBrush = (Brush)new BrushConverter().ConvertFromString("#3794C0")!;
+        private static readonly Brush DefaultBrush = (Brush)new BrushConverter().ConvertFromString("#D4D4D4")!;
         private string _destinationRoot = @"F:\Backup\Home-PC";
         private bool _isProcessing = false;
         private bool _isVhdxMountedManual = false;
@@ -780,7 +784,9 @@ namespace xBackup
                 {
                     Dispatcher.Invoke(() =>
                     {
+                        _currentFilePath = file;
                         TxtProgressDetails.Text = $"[{current:N0}/{total:N0}] Restoring: {Path.GetFileName(file)}";
+                        TxtProgressDetails.Foreground = LinkBrush;
                         if (current % 100 == 0 || current == total)
                         {
                             PrgBar.Maximum = total;
@@ -827,6 +833,8 @@ namespace xBackup
                     LblScanned.Text = filesToRestore.Count.ToString("N0");
                     PrgBar.Maximum = filesToRestore.Count;
                     TxtProgressDetails.Text = $"Found {filesToRestore.Count:N0} files to restore.";
+                    _currentFilePath = null;
+                    TxtProgressDetails.Foreground = DefaultBrush;
                 });
 
                 for (int i = 0; i < filesToRestore.Count; i++)
@@ -841,7 +849,9 @@ namespace xBackup
 
                     Dispatcher.Invoke(() =>
                     {
+                        _currentFilePath = file;
                         TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToRestore.Count:N0}] Restoring: {Path.GetFileName(file)}";
+                        TxtProgressDetails.Foreground = LinkBrush;
                         if (currentIndex % 100 == 0 || currentIndex == filesToRestore.Count)
                         {
                             PrgBar.Value = currentIndex;
@@ -959,6 +969,8 @@ namespace xBackup
             Dispatcher.Invoke(() =>
             {
                 TxtProgressDetails.Text = "Restore Operation Finished";
+                _currentFilePath = null;
+                TxtProgressDetails.Foreground = DefaultBrush;
                 LblBackedUp.Text = restoredCount.ToString("N0");
                 LblUpToDate.Text = skippedCount.ToString("N0");
                 LblLocked.Text = errorCount.ToString("N0");
@@ -1102,7 +1114,9 @@ namespace xBackup
 
                     Dispatcher.Invoke(() =>
                     {
+                        _currentFilePath = file;
                         TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToProcess.Count:N0}] Checking: {Path.GetFileName(file)}";
+                        TxtProgressDetails.Foreground = LinkBrush;
                         if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
                         {
                             PrgBar.Value = currentIndex;
@@ -1343,6 +1357,8 @@ namespace xBackup
             Dispatcher.Invoke(() =>
             {
                 TxtProgressDetails.Text = "Backup Operation Finished";
+                _currentFilePath = null;
+                TxtProgressDetails.Foreground = DefaultBrush;
                 LblBackedUp.Text = backedUpCount.ToString("N0");
                 LblUpToDate.Text = upToDateCount.ToString("N0");
                 LblLocked.Text = lockedCount.ToString("N0");
@@ -1646,6 +1662,33 @@ for ($i = 0; $i -lt 20; $i++) {{
             int i = 0;
             while (dblBytes >= 1024 && i < suffix.Length - 1) { i++; dblBytes /= 1024; }
             return $"{dblBytes:F2} {suffix[i]}";
+        }
+
+        private void TxtProgressDetails_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (!string.IsNullOrEmpty(_currentFilePath))
+            {
+                OpenContainingFolder(_currentFilePath);
+            }
+        }
+
+        private void OpenContainingFolder(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path)) return;
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"/select,\"{path}\"",
+                    UseShellExecute = true
+                };
+                Process.Start(startInfo);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Failed to open folder: {ex.Message}", Brushes.Red);
+            }
         }
 
         private void AppendLog(string message, Brush color)
