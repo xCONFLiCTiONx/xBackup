@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace xBackup
@@ -119,6 +120,33 @@ namespace xBackup
             }
         }
 
+        public static void UpdateSettings(IEnumerable<string> exclusions, IEnumerable<string> drives, int retentionDays)
+        {
+            lock (_lock)
+            {
+                CustomExcludedPaths.Clear();
+                foreach (var path in exclusions)
+                {
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        CustomExcludedPaths.Add(path.Trim().ToLowerInvariant().Replace('/', '\\'));
+                    }
+                }
+
+                SelectedDrives.Clear();
+                foreach (var drive in drives)
+                {
+                    SelectedDrives.Add(drive.ToUpperInvariant());
+                }
+
+                if (retentionDays > 0)
+                {
+                    RetentionDays = retentionDays;
+                }
+            }
+            Save();
+        }
+
         public static void Save()
         {
             lock (_lock)
@@ -168,6 +196,30 @@ namespace xBackup
             }
 
             return false;
+        }
+
+        public static bool HasCustomExcludedChildren(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            string prefix = path.ToLowerInvariant().Replace('/', '\\');
+            if (!prefix.EndsWith("\\")) prefix += "\\";
+
+            lock (_lock)
+            {
+                return CustomExcludedPaths.Any(p => p.StartsWith(prefix));
+            }
+        }
+
+        public static List<string> GetExclusionsUnderPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return new List<string>();
+            string prefix = path.ToLowerInvariant().Replace('/', '\\');
+            if (!prefix.EndsWith("\\")) prefix += "\\";
+
+            lock (_lock)
+            {
+                return CustomExcludedPaths.Where(p => p.StartsWith(prefix)).ToList();
+            }
         }
 
         public static bool IsDefaultExcluded(string fullPath)

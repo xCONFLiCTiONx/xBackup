@@ -173,7 +173,15 @@ namespace xBackup
             // 2. Drive Roots are checked if in SelectedDrives
             if (FullPath.Length <= 3 && FullPath.Contains(":\\"))
             {
-                _isChecked = GlobalExclusions.SelectedDrives.Contains(FullPath.ToUpperInvariant());
+                bool isSelected = GlobalExclusions.SelectedDrives.Contains(FullPath.ToUpperInvariant());
+                if (isSelected && GlobalExclusions.HasCustomExcludedChildren(FullPath))
+                {
+                    _isChecked = null;
+                }
+                else
+                {
+                    _isChecked = isSelected;
+                }
                 return;
             }
 
@@ -187,14 +195,28 @@ namespace xBackup
             // 4. Special cases for C: drive default inclusions
             if (lower.StartsWith("c:\\users") || lower.Equals("c:\\programdata"))
             {
-                _isChecked = true;
+                if (GlobalExclusions.HasCustomExcludedChildren(FullPath))
+                {
+                    _isChecked = null;
+                }
+                else
+                {
+                    _isChecked = true;
+                }
                 return;
             }
 
             // 5. Otherwise inherit from parent
             if (Parent != null)
             {
-                _isChecked = Parent.IsChecked;
+                if (Parent.IsChecked == true && GlobalExclusions.HasCustomExcludedChildren(FullPath))
+                {
+                    _isChecked = null;
+                }
+                else
+                {
+                    _isChecked = Parent.IsChecked;
+                }
             }
         }
 

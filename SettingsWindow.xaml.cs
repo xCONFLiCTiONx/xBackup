@@ -63,29 +63,14 @@ namespace xBackup
                 }
 
                 // Update the global list and persist to json config cache
-                GlobalExclusions.CustomExcludedPaths.Clear();
-                foreach (var path in newExclusions)
-                {
-                    GlobalExclusions.CustomExcludedPaths.Add(path);
-                }
-
-                GlobalExclusions.SelectedDrives.Clear();
-                foreach (var drive in selectedDrives)
-                {
-                    GlobalExclusions.SelectedDrives.Add(drive);
-                }
-
-                if (int.TryParse(TxtRetentionDays.Text, out int rentDays) && rentDays > 0)
-                {
-                    GlobalExclusions.RetentionDays = rentDays;
-                }
-                else
+                int rentDays = 90;
+                if (!int.TryParse(TxtRetentionDays.Text, out rentDays) || rentDays <= 0)
                 {
                     MessageBox.Show("Please enter a valid number of days for history retention (minimum 1).", "Invalid Setting", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
-                GlobalExclusions.Save();
+                GlobalExclusions.UpdateSettings(newExclusions, selectedDrives, rentDays);
 
                 MessageBox.Show("Backup settings and exclusions updated and saved successfully.", "Settings Saved", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
@@ -101,6 +86,17 @@ namespace xBackup
             if (node.IsChecked == false)
             {
                 exclusions.Add(node.FullPath.ToLower());
+                return;
+            }
+
+            // Handle Indeterminate state for unloaded nodes to prevent wiping out deep exclusions
+            if (node.IsChecked == null && node.Children.Count == 1 && node.Children[0].Name == "Loading...")
+            {
+                var existingExclusions = GlobalExclusions.GetExclusionsUnderPath(node.FullPath);
+                foreach (var excl in existingExclusions)
+                {
+                    exclusions.Add(excl.ToLower());
+                }
                 return;
             }
 
