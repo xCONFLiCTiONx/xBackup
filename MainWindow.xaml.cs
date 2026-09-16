@@ -1148,14 +1148,32 @@ namespace xBackup
 
                     if (latestVersion != null && latestVersion.ChangeType != ChangeType.Deleted)
                     {
-                        if (latestVersion.Size == sourceFi.Length && latestVersion.LastWriteUtc == sourceFi.LastWriteTimeUtc)
+                        // Diagnostic logging for the first few files to identify why incremental might be failing
+                        if (currentIndex <= 10)
+                        {
+                            AppendLog($"[DEBUG] Incremental Check: {Path.GetFileName(file)}", Brushes.Cyan);
+                            AppendLog($"[DEBUG]   Prior: Snap={latestVersion.SnapshotId}, Size={latestVersion.Size}, Time={latestVersion.LastWriteUtc:O}", Brushes.Gray);
+                            AppendLog($"[DEBUG]   Curr:  Size={sourceFi.Length}, Time={sourceFi.LastWriteTimeUtc:O}", Brushes.Gray);
+                        }
+
+                        // Robust comparison: Ensure both are treated as UTC and compare ticks to avoid precision issues
+                        bool sizeMatch = latestVersion.Size == sourceFi.Length;
+                        bool dateMatch = latestVersion.LastWriteUtc.ToUniversalTime().Ticks == sourceFi.LastWriteTimeUtc.Ticks;
+
+                        if (sizeMatch && dateMatch)
                         {
                             needsCopy = false;
+                            if (currentIndex <= 10) AppendLog($"[DEBUG]   Result: UNCHANGED", Brushes.LightGreen);
                         }
                         else
                         {
                             changeType = ChangeType.Modified;
+                            if (currentIndex <= 10) AppendLog($"[DEBUG]   Result: MODIFIED (SizeMatch={sizeMatch}, DateMatch={dateMatch})", Brushes.Yellow);
                         }
+                    }
+                    else
+                    {
+                        if (currentIndex <= 10) AppendLog($"[DEBUG] Incremental Check: {Path.GetFileName(file)} -> RESULT: NEW", Brushes.White);
                     }
 
                     if (!needsCopy)

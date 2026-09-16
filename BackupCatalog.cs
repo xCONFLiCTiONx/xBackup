@@ -163,16 +163,17 @@ namespace xBackup
             using (var command = _connection.CreateCommand())
             {
                 string sql = @"
-                    SELECT Id, FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType
-                    FROM FileVersions
-                    WHERE FileId = @fileId";
+                    SELECT fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType
+                    FROM FileVersions fv
+                    JOIN Snapshots s ON fv.SnapshotId = s.Id
+                    WHERE fv.FileId = @fileId AND s.Status = 'Complete'";
 
                 if (maxSnapshotId.HasValue)
                 {
-                    sql += " AND SnapshotId <= @maxSnap";
+                    sql += " AND fv.SnapshotId <= @maxSnap";
                 }
 
-                sql += " ORDER BY SnapshotId DESC LIMIT 1";
+                sql += " ORDER BY fv.SnapshotId DESC LIMIT 1";
 
                 command.CommandText = sql;
                 command.Parameters.AddWithValue("@fileId", fileId);
@@ -185,6 +186,15 @@ namespace xBackup
                 {
                     if (reader.Read())
                     {
+                        string dateStr = reader.GetString(5);
+                        DateTime lastWrite;
+
+                        // Robust parsing for round-trip ISO 8601
+                        if (!DateTime.TryParse(dateStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out lastWrite))
+                        {
+                            lastWrite = DateTime.Parse(dateStr);
+                        }
+
                         return new FileVersion
                         {
                             Id = reader.GetInt32(0),
@@ -192,7 +202,7 @@ namespace xBackup
                             SnapshotId = reader.GetInt32(2),
                             BackupPath = reader.IsDBNull(3) ? null : reader.GetString(3),
                             Size = reader.GetInt64(4),
-                            LastWriteUtc = DateTime.Parse(reader.GetString(5)),
+                            LastWriteUtc = lastWrite,
                             Hash = reader.IsDBNull(6) ? null : reader.GetString(6),
                             ChangeType = Enum.Parse<ChangeType>(reader.GetString(7))
                         };
