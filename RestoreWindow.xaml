@@ -115,21 +115,22 @@
                 <ComboBox x:Name="CboSnapshots" DisplayMemberPath="SnapshotDate" SelectedValuePath="Id" SelectionChanged="CboSnapshots_SelectionChanged" Background="#1E1E1E" Foreground="White" BorderBrush="#3E3E42"/>
 
                 <StackPanel Orientation="Horizontal" Margin="0,15,0,0">
-                    <RadioButton x:Name="RbFullRestore" Content="Full Restore (Original Locations)" IsChecked="True" Foreground="#D4D4D4" Margin="0,0,20,0"/>
-                    <RadioButton x:Name="RbSelectiveRestore" Content="Selective Restore" Foreground="#D4D4D4"/>
+                    <RadioButton x:Name="RbFullRestore" Content="Full Restore (Original Locations)" IsChecked="True" Foreground="#D4D4D4" Margin="0,0,20,0" Checked="RbRestoreMode_Changed"/>
+                    <RadioButton x:Name="RbSelectiveRestore" Content="Selective Restore" Foreground="#D4D4D4" Checked="RbRestoreMode_Changed"/>
                 </StackPanel>
             </StackPanel>
 
             <StackPanel Grid.Column="1">
-                <TextBlock Text="Restore Destination Folder:" FontSize="12" Foreground="#858585" Margin="0,0,0,5"/>
-                <Grid>
+                <TextBlock x:Name="TxtDestLabel" Text="Restore Destination Folder:" FontSize="12" Foreground="#858585" Margin="0,0,0,5"/>
+                <Grid x:Name="GridDestPicker">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="TxtDestPath" Background="#1E1E1E" Foreground="White" BorderBrush="#3E3E42" Padding="6" IsEnabled="{Binding IsChecked, ElementName=RbSelectiveRestore}"/>
-                    <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="30" Margin="5,0,0,0" Background="#3E3E42" Click="BtnBrowseDest_Click" IsEnabled="{Binding IsChecked, ElementName=RbSelectiveRestore}"/>
+                    <TextBox x:Name="TxtDestPath" Background="#1E1E1E" Foreground="White" BorderBrush="#3E3E42" Padding="6"/>
+                    <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="30" Margin="5,0,0,0" Background="#3E3E42" Click="BtnBrowseDest_Click"/>
                 </Grid>
+                <TextBlock x:Name="TxtFullRestoreInfo" Text="Files will be restored to their original locations (e.g. C:\, D:\)." Foreground="#4EC9B0" FontSize="11" FontStyle="Italic" Margin="0,5,0,0" Visibility="Collapsed"/>
 
                 <CheckBox x:Name="ChkOverwrite" Content="Overwrite existing files" Foreground="#D4D4D4" Margin="0,10,0,0" IsChecked="True"/>
             </StackPanel>

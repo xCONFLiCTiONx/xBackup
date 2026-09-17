@@ -232,6 +232,11 @@ namespace xBackup
             }
         }
 
+        public List<Snapshot> GetSnapshots()
+        {
+            return GetCompletedSnapshots();
+        }
+
         public List<Snapshot> GetCompletedSnapshots()
         {
             var list = new List<Snapshot>();
@@ -256,23 +261,21 @@ namespace xBackup
             return list;
         }
 
-        public List<Snapshot> GetSnapshots()
+        public List<BackupFile> GetAllFiles()
         {
-            var list = new List<Snapshot>();
+            var list = new List<BackupFile>();
             using (var command = _connection.CreateCommand())
             {
-                command.CommandText = "SELECT Id, SnapshotDate, StartedUtc, CompletedUtc, Status FROM Snapshots WHERE Status = 'Complete' ORDER BY SnapshotDate DESC";
+                command.CommandText = "SELECT Id, SourcePath, NormalizedPath FROM Files";
                 using (var reader = command.ExecuteReader())
                 {
                     while (reader.Read())
                     {
-                        list.Add(new Snapshot
+                        list.Add(new BackupFile
                         {
                             Id = reader.GetInt32(0),
-                            SnapshotDate = DateTime.Parse(reader.GetString(1)),
-                            StartedUtc = DateTime.Parse(reader.GetString(2)),
-                            CompletedUtc = reader.IsDBNull(3) ? null : DateTime.Parse(reader.GetString(3)),
-                            Status = SnapshotStatus.Complete
+                            SourcePath = reader.GetString(1),
+                            NormalizedPath = reader.GetString(2)
                         });
                     }
                 }

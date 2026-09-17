@@ -124,6 +124,16 @@ namespace xBackup
             return rootNodes.Values.OrderBy(n => n.Name).ToList();
         }
 
+        private void RbRestoreMode_Changed(object sender, RoutedEventArgs e)
+        {
+            if (TxtDestLabel == null) return;
+
+            bool isSelective = RbSelectiveRestore.IsChecked == true;
+            TxtDestLabel.Visibility = isSelective ? Visibility.Visible : Visibility.Collapsed;
+            GridDestPicker.Visibility = isSelective ? Visibility.Visible : Visibility.Collapsed;
+            TxtFullRestoreInfo.Visibility = isSelective ? Visibility.Collapsed : Visibility.Visible;
+        }
+
         private void BtnBrowseDest_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new Microsoft.Win32.OpenFolderDialog

@@ -700,6 +700,13 @@ namespace xBackup
                 return;
             }
 
+            string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
+            if (!File.Exists(dbPath))
+            {
+                MessageBox.Show("Backup catalog not found in the storage container.", "Restore Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
             using var catalog = new BackupCatalog(dbPath);
             var restoreWindow = new RestoreWindow(catalog, mountedDrive) { Owner = this };
 
