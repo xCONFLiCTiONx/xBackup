@@ -132,7 +132,7 @@
                 </Grid>
                 <TextBlock x:Name="TxtFullRestoreInfo" Text="Files will be restored to their original locations (e.g. C:\, D:\)." Foreground="#4EC9B0" FontSize="11" FontStyle="Italic" Margin="0,5,0,0" Visibility="Visible"/>
 
-                <CheckBox x:Name="ChkOverwrite" Content="Overwrite existing files" Foreground="#D4D4D4" Margin="0,10,0,0" IsChecked="True"/>
+                <CheckBox x:Name="ChkOverwrite" Content="Overwrite existing files" Foreground="#D4D4D4" Margin="0,10,0,0" IsChecked="False"/>
             </StackPanel>
         </Grid>
 
