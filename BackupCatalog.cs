@@ -17,18 +17,30 @@ namespace xBackup
                 DataSource = dbPath,
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 ForeignKeys = true,
-                DefaultTimeout = 30 // Increase timeout for slower drives/VHDXs
+                DefaultTimeout = 60 // High timeout for VHDX latency
             }.ToString();
 
             _connection = new SqliteConnection(connectionString);
 
             // Robust connection opening with retries for VHDX/Removable drive edge cases
-            int retries = 5;
+            // VHDX on ReFS can take 15-20 seconds to fully stabilize I/O after mount
+            int retries = 30;
             while (retries > 0)
             {
                 try
                 {
-                    _connection.Open();
+                    if (_connection.State != System.Data.ConnectionState.Open)
+                    {
+                        _connection.Open();
+                    }
+
+                    using (var cmd = _connection.CreateCommand())
+                    {
+                        // Performance and reliability tweaks for ReFS Dev Drives
+                        cmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 10000;";
+                        cmd.ExecuteNonQuery();
+                    }
+
                     InitializeSchema();
                     break;
                 }
@@ -36,7 +48,8 @@ namespace xBackup
                 {
                     retries--;
                     if (retries == 0) throw;
-                    System.Threading.Thread.Sleep(500); // Wait for filesystem to stabilize
+                    try { if (_connection.State == System.Data.ConnectionState.Open) _connection.Close(); } catch { }
+                    System.Threading.Thread.Sleep(1000);
                 }
             }
         }
@@ -135,123 +148,136 @@ namespace xBackup
 
         public BackupFile GetOrCreateFile(string sourcePath)
         {
-            string normalized = NormalizePath(sourcePath);
-
-            using (var command = _connection.CreateCommand())
+            return RunWithRetry(() =>
             {
-                command.CommandText = "SELECT Id, SourcePath FROM Files WHERE NormalizedPath = @norm";
-                command.Parameters.AddWithValue("@norm", normalized);
+                string normalized = NormalizePath(sourcePath);
 
-                using (var reader = command.ExecuteReader())
+                using (var command = _connection.CreateCommand())
                 {
-                    if (reader.Read())
+                    command.CommandText = "SELECT Id, SourcePath FROM Files WHERE NormalizedPath = @norm";
+                    command.Parameters.AddWithValue("@norm", normalized);
+
+                    using (var reader = command.ExecuteReader())
                     {
-                        return new BackupFile
+                        if (reader.Read())
                         {
-                            Id = reader.GetInt32(0),
-                            SourcePath = reader.GetString(1),
-                            NormalizedPath = normalized
-                        };
+                            return new BackupFile
+                            {
+                                Id = reader.GetInt32(0),
+                                SourcePath = reader.GetString(1),
+                                NormalizedPath = normalized
+                            };
+                        }
                     }
                 }
-            }
 
-            using (var command = _connection.CreateCommand())
-            {
-                command.CommandText = @"
-                    INSERT INTO Files (SourcePath, NormalizedPath)
-                    VALUES (@source, @norm);
-                    SELECT last_insert_rowid();";
-                command.Parameters.AddWithValue("@source", sourcePath);
-                command.Parameters.AddWithValue("@norm", normalized);
-
-                int id = Convert.ToInt32(command.ExecuteScalar());
-                return new BackupFile
+                using (var command = _connection.CreateCommand())
                 {
-                    Id = id,
-                    SourcePath = sourcePath,
-                    NormalizedPath = normalized
-                };
-            }
+                    command.CommandText = @"
+                        INSERT INTO Files (SourcePath, NormalizedPath)
+                        VALUES (@source, @norm);
+                        SELECT last_insert_rowid();";
+                    command.Parameters.AddWithValue("@source", sourcePath);
+                    command.Parameters.AddWithValue("@norm", normalized);
+
+                    int id = Convert.ToInt32(command.ExecuteScalar());
+                    return new BackupFile
+                    {
+                        Id = id,
+                        SourcePath = sourcePath,
+                        NormalizedPath = normalized
+                    };
+                }
+            });
         }
 
         public FileVersion? GetLatestVersion(int fileId, int? maxSnapshotId = null)
         {
-            using (var command = _connection.CreateCommand())
+            return RunWithRetry(() =>
             {
-                string sql = @"
-                    SELECT fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType
-                    FROM FileVersions fv
-                    JOIN Snapshots s ON fv.SnapshotId = s.Id
-                    WHERE fv.FileId = @fileId AND s.Status = 'Complete'";
-
-                if (maxSnapshotId.HasValue)
+                using (var command = _connection.CreateCommand())
                 {
-                    sql += " AND fv.SnapshotId <= @maxSnap";
-                }
+                    string sql = @"
+                        SELECT fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType
+                        FROM FileVersions fv
+                        JOIN Snapshots s ON fv.SnapshotId = s.Id
+                        WHERE fv.FileId = @fileId AND s.Status = 'Complete'";
 
-                sql += " ORDER BY fv.SnapshotId DESC LIMIT 1";
-
-                command.CommandText = sql;
-                command.Parameters.AddWithValue("@fileId", fileId);
-                if (maxSnapshotId.HasValue)
-                {
-                    command.Parameters.AddWithValue("@maxSnap", maxSnapshotId.Value);
-                }
-
-                using (var reader = command.ExecuteReader())
-                {
-                    if (reader.Read())
+                    if (maxSnapshotId.HasValue)
                     {
-                        string dateStr = reader.GetString(5);
-                        DateTime lastWrite;
+                        sql += " AND fv.SnapshotId <= @maxSnap";
+                    }
 
-                        // Robust parsing for round-trip ISO 8601
-                        if (!DateTime.TryParse(dateStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out lastWrite))
+                    sql += " ORDER BY fv.SnapshotId DESC LIMIT 1";
+
+                    command.CommandText = sql;
+                    command.Parameters.AddWithValue("@fileId", fileId);
+                    if (maxSnapshotId.HasValue)
+                    {
+                        command.Parameters.AddWithValue("@maxSnap", maxSnapshotId.Value);
+                    }
+
+                    using (var reader = command.ExecuteReader())
+                    {
+                        if (reader.Read())
                         {
-                            lastWrite = DateTime.Parse(dateStr);
+                            string dateStr = reader.GetString(5);
+                            DateTime lastWrite;
+
+                            // Robust parsing for round-trip ISO 8601
+                            if (!DateTime.TryParse(dateStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out lastWrite))
+                            {
+                                lastWrite = DateTime.Parse(dateStr);
+                            }
+
+                            return new FileVersion
+                            {
+                                Id = reader.GetInt32(0),
+                                FileId = reader.GetInt32(1),
+                                SnapshotId = reader.GetInt32(2),
+                                BackupPath = reader.IsDBNull(3) ? null : reader.GetString(3),
+                                Size = reader.GetInt64(4),
+                                LastWriteUtc = lastWrite,
+                                Hash = reader.IsDBNull(6) ? null : reader.GetString(6),
+                                ChangeType = Enum.Parse<ChangeType>(reader.GetString(7))
+                            };
                         }
-
-                        return new FileVersion
-                        {
-                            Id = reader.GetInt32(0),
-                            FileId = reader.GetInt32(1),
-                            SnapshotId = reader.GetInt32(2),
-                            BackupPath = reader.IsDBNull(3) ? null : reader.GetString(3),
-                            Size = reader.GetInt64(4),
-                            LastWriteUtc = lastWrite,
-                            Hash = reader.IsDBNull(6) ? null : reader.GetString(6),
-                            ChangeType = Enum.Parse<ChangeType>(reader.GetString(7))
-                        };
                     }
                 }
-            }
-            return null;
+                return null;
+            });
         }
 
         public void AddFileVersion(FileVersion version)
         {
-            using (var command = _connection.CreateCommand())
+            RunWithRetry<object?>(() =>
             {
-                command.CommandText = @"
-                    INSERT INTO FileVersions (FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType)
-                    VALUES (@fileId, @snapId, @path, @size, @write, @hash, @type)";
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = @"
+                        INSERT INTO FileVersions (FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType)
+                        VALUES (@fileId, @snapId, @path, @size, @write, @hash, @type)";
 
-                command.Parameters.AddWithValue("@fileId", version.FileId);
-                command.Parameters.AddWithValue("@snapId", version.SnapshotId);
-                command.Parameters.AddWithValue("@path", (object?)version.BackupPath ?? DBNull.Value);
-                command.Parameters.AddWithValue("@size", version.Size);
-                command.Parameters.AddWithValue("@write", version.LastWriteUtc.ToString("O"));
-                command.Parameters.AddWithValue("@hash", (object?)version.Hash ?? DBNull.Value);
-                command.Parameters.AddWithValue("@type", version.ChangeType.ToString());
+                    command.Parameters.AddWithValue("@fileId", version.FileId);
+                    command.Parameters.AddWithValue("@snapId", version.SnapshotId);
+                    command.Parameters.AddWithValue("@path", (object?)version.BackupPath ?? DBNull.Value);
+                    command.Parameters.AddWithValue("@size", version.Size);
+                    command.Parameters.AddWithValue("@write", version.LastWriteUtc.ToString("O"));
+                    command.Parameters.AddWithValue("@hash", (object?)version.Hash ?? DBNull.Value);
+                    command.Parameters.AddWithValue("@type", version.ChangeType.ToString());
 
-                command.ExecuteNonQuery();
-            }
+                    command.ExecuteNonQuery();
+                }
+                return null;
+            });
         }
 
         public List<Snapshot> GetSnapshots()
         {
-            return GetCompletedSnapshots();
+            return RunWithRetry(() =>
+            {
+                return GetCompletedSnapshots();
+            });
         }
 
         public List<Snapshot> GetCompletedSnapshots()
@@ -280,82 +306,112 @@ namespace xBackup
 
         public List<BackupFile> GetAllFiles()
         {
-            var list = new List<BackupFile>();
-            using (var command = _connection.CreateCommand())
+            return RunWithRetry(() =>
             {
-                command.CommandText = "SELECT Id, SourcePath, NormalizedPath FROM Files";
-                using (var reader = command.ExecuteReader())
+                var list = new List<BackupFile>();
+                using (var command = _connection.CreateCommand())
                 {
-                    while (reader.Read())
+                    command.CommandText = "SELECT Id, SourcePath, NormalizedPath FROM Files";
+                    using (var reader = command.ExecuteReader())
                     {
-                        list.Add(new BackupFile
+                        while (reader.Read())
                         {
-                            Id = reader.GetInt32(0),
-                            SourcePath = reader.GetString(1),
-                            NormalizedPath = reader.GetString(2)
-                        });
+                            list.Add(new BackupFile
+                            {
+                                Id = reader.GetInt32(0),
+                                SourcePath = reader.GetString(1),
+                                NormalizedPath = reader.GetString(2)
+                            });
+                        }
                     }
                 }
-            }
-            return list;
+                return list;
+            });
         }
 
         public List<(BackupFile file, FileVersion version)> GetFilesAtSnapshot(int snapshotId)
         {
-            var list = new List<(BackupFile file, FileVersion version)>();
-            using (var command = _connection.CreateCommand())
+            return RunWithRetry(() =>
             {
-                command.CommandText = @"
-                    SELECT f.Id, f.SourcePath, f.NormalizedPath,
-                           fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType
-                    FROM Files f
-                    JOIN FileVersions fv ON f.Id = fv.FileId
-                    WHERE fv.Id = (
-                        SELECT Id
-                        FROM FileVersions
-                        WHERE FileId = f.Id AND SnapshotId <= @snapId
-                        ORDER BY SnapshotId DESC
-                        LIMIT 1
-                    )
-                    AND fv.ChangeType != 'Deleted'";
-
-                command.Parameters.AddWithValue("@snapId", snapshotId);
-
-                using (var reader = command.ExecuteReader())
+                var list = new List<(BackupFile file, FileVersion version)>();
+                using (var command = _connection.CreateCommand())
                 {
-                    while (reader.Read())
+                    command.CommandText = @"
+                        SELECT f.Id, f.SourcePath, f.NormalizedPath,
+                               fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType
+                        FROM Files f
+                        JOIN FileVersions fv ON f.Id = fv.FileId
+                        WHERE fv.Id = (
+                            SELECT Id
+                            FROM FileVersions
+                            WHERE FileId = f.Id AND SnapshotId <= @snapId
+                            ORDER BY SnapshotId DESC
+                            LIMIT 1
+                        )
+                        AND fv.ChangeType != 'Deleted'";
+
+                    command.Parameters.AddWithValue("@snapId", snapshotId);
+
+                    using (var reader = command.ExecuteReader())
                     {
-                        var file = new BackupFile
+                        while (reader.Read())
                         {
-                            Id = reader.GetInt32(0),
-                            SourcePath = reader.GetString(1),
-                            NormalizedPath = reader.GetString(2)
-                        };
+                            var file = new BackupFile
+                            {
+                                Id = reader.GetInt32(0),
+                                SourcePath = reader.GetString(1),
+                                NormalizedPath = reader.GetString(2)
+                            };
 
-                        string dateStr = reader.GetString(8);
-                        DateTime lastWrite;
-                        if (!DateTime.TryParse(dateStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out lastWrite))
-                        {
-                            lastWrite = DateTime.Parse(dateStr);
+                            string dateStr = reader.GetString(8);
+                            DateTime lastWrite;
+                            if (!DateTime.TryParse(dateStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out lastWrite))
+                            {
+                                lastWrite = DateTime.Parse(dateStr);
+                            }
+
+                            var version = new FileVersion
+                            {
+                                Id = reader.GetInt32(3),
+                                FileId = reader.GetInt32(4),
+                                SnapshotId = reader.GetInt32(5),
+                                BackupPath = reader.IsDBNull(6) ? null : reader.GetString(6),
+                                Size = reader.GetInt64(7),
+                                LastWriteUtc = lastWrite,
+                                Hash = reader.IsDBNull(9) ? null : reader.GetString(9),
+                                ChangeType = Enum.Parse<ChangeType>(reader.GetString(10))
+                            };
+
+                            list.Add((file, version));
                         }
-
-                        var version = new FileVersion
-                        {
-                            Id = reader.GetInt32(3),
-                            FileId = reader.GetInt32(4),
-                            SnapshotId = reader.GetInt32(5),
-                            BackupPath = reader.IsDBNull(6) ? null : reader.GetString(6),
-                            Size = reader.GetInt64(7),
-                            LastWriteUtc = lastWrite,
-                            Hash = reader.IsDBNull(9) ? null : reader.GetString(9),
-                            ChangeType = Enum.Parse<ChangeType>(reader.GetString(10))
-                        };
-
-                        list.Add((file, version));
                     }
                 }
+                return list;
+            });
+        }
+
+        private T RunWithRetry<T>(Func<T> action)
+        {
+            int retries = 5;
+            while (true)
+            {
+                try
+                {
+                    if (_connection.State != System.Data.ConnectionState.Open)
+                    {
+                        _connection.Open();
+                    }
+                    return action();
+                }
+                catch (SqliteException ex) when (ex.SqliteErrorCode == 10 || ex.Message.Contains("disk I/O error"))
+                {
+                    retries--;
+                    if (retries <= 0) throw;
+
+                    try { if (_connection.State == System.Data.ConnectionState.Open) _connection.Close(); } catch { }
+                    System.Threading.Thread.Sleep(1000);
+                }
             }
-            return list;
         }
 
         public string NormalizePath(string path)

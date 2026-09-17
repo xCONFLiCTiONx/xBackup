@@ -49,20 +49,32 @@ namespace xBackup
 
         private async Task LoadFileTree(int snapshotId)
         {
-            PrgLoading.Visibility = Visibility.Visible;
-            TxtNoData.Visibility = Visibility.Collapsed;
-            RestoreTreeView.ItemsSource = null;
-
-            var files = await Task.Run(() => _catalog.GetFilesAtSnapshot(snapshotId));
-
-            var roots = await Task.Run(() => BuildTree(files));
-            RestoreTreeView.ItemsSource = roots;
-
-            PrgLoading.Visibility = Visibility.Collapsed;
-            if (roots.Count == 0)
+            try
             {
-                TxtNoData.Text = "No files found in this snapshot.";
+                PrgLoading.Visibility = Visibility.Visible;
+                TxtNoData.Visibility = Visibility.Collapsed;
+                RestoreTreeView.ItemsSource = null;
+
+                var files = await Task.Run(() => _catalog.GetFilesAtSnapshot(snapshotId));
+
+                var roots = await Task.Run(() => BuildTree(files));
+                RestoreTreeView.ItemsSource = roots;
+
+                if (roots.Count == 0)
+                {
+                    TxtNoData.Text = "No files found in this snapshot.";
+                    TxtNoData.Visibility = Visibility.Visible;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to load file tree: {ex.Message}\n\nPlease try selecting the snapshot again or wait a few seconds for the drive to stabilize.", "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                TxtNoData.Text = "Error loading files. Please retry.";
                 TxtNoData.Visibility = Visibility.Visible;
+            }
+            finally
+            {
+                PrgLoading.Visibility = Visibility.Collapsed;
             }
         }
 

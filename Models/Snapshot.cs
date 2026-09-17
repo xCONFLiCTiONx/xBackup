@@ -16,5 +16,7 @@ namespace xBackup.Models
         public DateTime StartedUtc { get; set; }
         public DateTime? CompletedUtc { get; set; }
         public SnapshotStatus Status { get; set; }
+
+        public override string ToString() => SnapshotDate.ToString("G");
     }
 }

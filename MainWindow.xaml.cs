@@ -688,8 +688,9 @@ namespace xBackup
                         BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(180, 50, 50));
                     });
 
-                    // Give the OS a moment to settle the filesystem after mounting
-                    await Task.Delay(1000);
+                    // VHDX mounting on ReFS can take several seconds for the filesystem to be fully ready for SQLite
+                    // We increase this to 3 seconds to avoid transient I/O errors immediately after mount.
+                    await Task.Delay(3000);
                 }
                 else if (mountedDrive == "Mounted")
                 {
@@ -1039,8 +1040,8 @@ namespace xBackup
                 AppendLog($"VHDX dynamically attached onto drive {mountedDrive}", Brushes.LightGreen);
                 Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Collapsed);
 
-                // Allow filesystem to stabilize
-                System.Threading.Thread.Sleep(1000);
+                // Allow filesystem to stabilize (ReFS mounting latency)
+                System.Threading.Thread.Sleep(2000);
 
                 // Initialize Catalog
                 string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
