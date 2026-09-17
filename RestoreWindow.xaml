@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:xBackup"
-        Title="Point-in-Time Restore Manager" Height="800" Width="900"
+        Title="Point-in-Time Restore Manager" Height="680" Width="860"
         Background="#1E1E1E" WindowStartupLocation="CenterOwner">
 
     <Window.Resources>
@@ -121,8 +121,8 @@
             </StackPanel>
 
             <StackPanel Grid.Column="1">
-                <TextBlock x:Name="TxtDestLabel" Text="Restore Destination Folder:" FontSize="12" Foreground="#858585" Margin="0,0,0,5"/>
-                <Grid x:Name="GridDestPicker">
+                <TextBlock x:Name="TxtDestLabel" Text="Restore Destination Folder:" FontSize="12" Foreground="#858585" Margin="0,0,0,5" Visibility="Collapsed"/>
+                <Grid x:Name="GridDestPicker" Visibility="Collapsed">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
@@ -130,7 +130,7 @@
                     <TextBox x:Name="TxtDestPath" Background="#1E1E1E" Foreground="White" BorderBrush="#3E3E42" Padding="6"/>
                     <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="30" Margin="5,0,0,0" Background="#3E3E42" Click="BtnBrowseDest_Click"/>
                 </Grid>
-                <TextBlock x:Name="TxtFullRestoreInfo" Text="Files will be restored to their original locations (e.g. C:\, D:\)." Foreground="#4EC9B0" FontSize="11" FontStyle="Italic" Margin="0,5,0,0" Visibility="Collapsed"/>
+                <TextBlock x:Name="TxtFullRestoreInfo" Text="Files will be restored to their original locations (e.g. C:\, D:\)." Foreground="#4EC9B0" FontSize="11" FontStyle="Italic" Margin="0,5,0,0" Visibility="Visible"/>
 
                 <CheckBox x:Name="ChkOverwrite" Content="Overwrite existing files" Foreground="#D4D4D4" Margin="0,10,0,0" IsChecked="True"/>
             </StackPanel>

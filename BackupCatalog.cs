@@ -16,12 +16,29 @@ namespace xBackup
             {
                 DataSource = dbPath,
                 Mode = SqliteOpenMode.ReadWriteCreate,
-                ForeignKeys = true
+                ForeignKeys = true,
+                DefaultTimeout = 30 // Increase timeout for slower drives/VHDXs
             }.ToString();
 
             _connection = new SqliteConnection(connectionString);
-            _connection.Open();
-            InitializeSchema();
+
+            // Robust connection opening with retries for VHDX/Removable drive edge cases
+            int retries = 5;
+            while (retries > 0)
+            {
+                try
+                {
+                    _connection.Open();
+                    InitializeSchema();
+                    break;
+                }
+                catch (SqliteException ex) when (ex.SqliteErrorCode == 10 || ex.Message.Contains("disk I/O error"))
+                {
+                    retries--;
+                    if (retries == 0) throw;
+                    System.Threading.Thread.Sleep(500); // Wait for filesystem to stabilize
+                }
+            }
         }
 
         private void InitializeSchema()

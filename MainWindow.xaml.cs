@@ -687,6 +687,9 @@ namespace xBackup
                         BtnToggleMount.Content = "Eject Drive";
                         BtnToggleMount.Background = new SolidColorBrush(Color.FromRgb(180, 50, 50));
                     });
+
+                    // Give the OS a moment to settle the filesystem after mounting
+                    await Task.Delay(1000);
                 }
                 else if (mountedDrive == "Mounted")
                 {
@@ -707,33 +710,37 @@ namespace xBackup
                 return;
             }
 
-            using var catalog = new BackupCatalog(dbPath);
-            var restoreWindow = new RestoreWindow(catalog, mountedDrive) { Owner = this };
-
-            if (restoreWindow.ShowDialog() != true) return;
-
-            var selectedItems = restoreWindow.SelectedNodes
-                .Select(n => (n.FullPath, n.Version!))
-                .ToList();
-
-            SetUiState(processing: true);
-            RtbLog.Document.Blocks.Clear();
-            PrgBar.Value = 0;
-
-            _cts = new System.Threading.CancellationTokenSource();
-
             try
             {
+                using var catalog = new BackupCatalog(dbPath);
+                var restoreWindow = new RestoreWindow(catalog, mountedDrive) { Owner = this };
+
+                if (restoreWindow.ShowDialog() != true) return;
+
+                var selectedItems = restoreWindow.SelectedNodes
+                    .Select(n => (n.FullPath, n.Version!))
+                    .ToList();
+
+                SetUiState(processing: true);
+                RtbLog.Document.Blocks.Clear();
+                PrgBar.Value = 0;
+
+                _cts = new System.Threading.CancellationTokenSource();
+
                 await Task.Run(() => RunCatalogRestoreEngine(mountedDrive, selectedItems, restoreWindow.TargetPath, restoreWindow.FullRestore, restoreWindow.Overwrite, _cts.Token));
             }
-            catch (OperationCanceledException)
+            catch (Exception ex)
             {
-                AppendLog("Restore operation was cancelled by the user.", Brushes.Orange);
+                AppendLog($"Restore initialization failed: {ex.Message}", Brushes.Red);
+                MessageBox.Show($"Could not initialize restore: {ex.Message}", "Restore Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
-                _cts.Dispose();
-                _cts = null;
+                if (_cts != null)
+                {
+                    _cts.Dispose();
+                    _cts = null;
+                }
                 SetUiState(processing: false);
             }
         }
@@ -1031,6 +1038,9 @@ namespace xBackup
                 newlyMounted = true;
                 AppendLog($"VHDX dynamically attached onto drive {mountedDrive}", Brushes.LightGreen);
                 Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Collapsed);
+
+                // Allow filesystem to stabilize
+                System.Threading.Thread.Sleep(1000);
 
                 // Initialize Catalog
                 string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
