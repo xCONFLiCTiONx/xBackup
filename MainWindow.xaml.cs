@@ -1362,6 +1362,11 @@ namespace xBackup
 
                     catalog.UpdateSnapshotStatus(snapshot.Id, SnapshotStatus.Complete);
                     AppendLog($"Backup cycle finished. Copied {backedUpCount:N0} files. {upToDateCount:N0} were up-to-date. {purgedFilesCount:N0} deletions recorded.", Brushes.LightGreen);
+
+                    if (_isSilentMode)
+                    {
+                        CheckAndRunWeeklyIntegrity(catalog, mountedDrive);
+                    }
             }
             catch (OperationCanceledException)
             {
@@ -1563,57 +1568,8 @@ exit";
                     string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
 
                     using var catalog = new BackupCatalog(dbPath);
-                    var snapshots = catalog.GetCompletedSnapshots();
-                    if (snapshots.Count == 0)
-                    {
-                        AppendLog("No completed snapshots found to verify.", Brushes.Yellow);
-                        return;
-                    }
 
-                    // Verify latest snapshot for brevity, or all if you prefer.
-                    // Let's verify all files in the catalog for maximum protection.
-                    var allVersions = new List<FileVersion>();
-                    foreach(var snap in snapshots)
-                    {
-                        allVersions.AddRange(catalog.GetFileVersionsForSnapshot(snap.Id));
-                    }
-
-                    int total = allVersions.Count(v => !string.IsNullOrEmpty(v.BackupPath) && v.ChangeType != ChangeType.Deleted);
-                    int checkedCount = 0;
-                    int corruptCount = 0;
-
-                    foreach (var v in allVersions)
-                    {
-                        if (string.IsNullOrEmpty(v.BackupPath) || v.ChangeType == ChangeType.Deleted) continue;
-
-                        string physicalPath = Path.Combine(mountedDrive, v.BackupPath);
-                        if (File.Exists(physicalPath))
-                        {
-                            if (string.IsNullOrEmpty(v.Hash))
-                            {
-                                AppendLog($"Skipped hash check (no recorded hash): {v.BackupPath}", Brushes.Orange);
-                            }
-                            else
-                            {
-                                string currentHash = CalculateHash(physicalPath);
-                                if (currentHash != v.Hash)
-                                {
-                                    AppendLog($"!!! BIT ROT DETECTED: {v.BackupPath} (Expected: {v.Hash}, Actual: {currentHash})", Brushes.Red);
-                                    corruptCount++;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            AppendLog($"Missing file: {v.BackupPath}", Brushes.Orange);
-                        }
-
-                        checkedCount++;
-                        if (checkedCount % 50 == 0 || checkedCount == total)
-                        {
-                            AppendLog($"Verified {checkedCount}/{total} files...", Brushes.Gray);
-                        }
-                    }
+                    int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive);
 
                     if (corruptCount == 0)
                     {
@@ -1621,7 +1577,7 @@ exit";
                     }
                     else
                     {
-                        AppendLog($"Integrity Check Complete: {corruptCount} corruptions found!", Brushes.Red);
+                        AppendLog($"Integrity Check Complete: {corruptCount} issues found!", Brushes.Red);
                     }
                 });
             }
@@ -1633,6 +1589,88 @@ exit";
             {
                 BtnVerify.IsEnabled = true;
             }
+        }
+
+        private void CheckAndRunWeeklyIntegrity(BackupCatalog catalog, string mountedDrive)
+        {
+            try
+            {
+                string? lastCheckStr = catalog.GetMetadata("LastIntegrityCheckUtc");
+                DateTime lastCheck = DateTime.MinValue;
+                if (lastCheckStr != null) DateTime.TryParse(lastCheckStr, out lastCheck);
+
+                // Run integrity check every 7 days
+                if ((DateTime.UtcNow - lastCheck).TotalDays >= 7)
+                {
+                    AppendLog("Automated Weekly Integrity Check Triggered...", Brushes.DeepSkyBlue);
+                    int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive);
+
+                    catalog.SetMetadata("LastIntegrityCheckUtc", DateTime.UtcNow.ToString("O"));
+
+                    if (corruptCount > 0)
+                    {
+                        _notifyIcon?.ShowNotification("Bit Rot Detected!", $"Automated integrity check found {corruptCount} corruptions in your backup.");
+                    }
+                    else
+                    {
+                        AppendLog("Automated Integrity Check Passed: No corruption detected.", Brushes.LightGreen);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Automated integrity check failed to initialize: {ex.Message}", Brushes.Orange);
+            }
+        }
+
+        private int PerformIntegrityCheckInternal(BackupCatalog catalog, string mountedDrive)
+        {
+            var snapshots = catalog.GetCompletedSnapshots();
+            if (snapshots.Count == 0) return 0;
+
+            var allVersions = new List<FileVersion>();
+            foreach (var snap in snapshots)
+            {
+                allVersions.AddRange(catalog.GetFileVersionsForSnapshot(snap.Id));
+            }
+
+            int total = allVersions.Count(v => !string.IsNullOrEmpty(v.BackupPath) && v.ChangeType != ChangeType.Deleted);
+            int checkedCount = 0;
+            int corruptCount = 0;
+
+            foreach (var v in allVersions)
+            {
+                if (string.IsNullOrEmpty(v.BackupPath) || v.ChangeType == ChangeType.Deleted) continue;
+
+                string physicalPath = Path.Combine(mountedDrive, v.BackupPath);
+                if (File.Exists(physicalPath))
+                {
+                    if (!string.IsNullOrEmpty(v.Hash))
+                    {
+                        string currentHash = CalculateHash(physicalPath);
+                        if (currentHash != v.Hash)
+                        {
+                            AppendLog($"!!! BIT ROT DETECTED: {v.BackupPath} (Expected: {v.Hash}, Actual: {currentHash})", Brushes.Red);
+                            corruptCount++;
+                        }
+                    }
+                }
+                else
+                {
+                    // For automated check, missing files are a concern but not technically bit rot.
+                    // We'll count them as corruptions for notification purposes.
+                    AppendLog($"Missing file during integrity check: {v.BackupPath}", Brushes.Orange);
+                    corruptCount++;
+                }
+
+                checkedCount++;
+                if (checkedCount % 100 == 0 || checkedCount == total)
+                {
+                    AppendLog($"Verified {checkedCount}/{total} files...", Brushes.Gray);
+                }
+            }
+
+            return corruptCount;
         }
 
         private static void RunDiskpartScript(string scriptContent)

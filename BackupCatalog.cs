@@ -85,6 +85,11 @@ namespace xBackup
                     FOREIGN KEY (SnapshotId) REFERENCES Snapshots(Id)
                 );
 
+                CREATE TABLE IF NOT EXISTS Metadata (
+                    Key TEXT PRIMARY KEY,
+                    Value TEXT
+                );
+
                 CREATE INDEX IF NOT EXISTS IDX_Files_NormalizedPath ON Files(NormalizedPath);
                 CREATE INDEX IF NOT EXISTS IDX_FileVersions_FileId_SnapshotId ON FileVersions(FileId, SnapshotId);
                 CREATE INDEX IF NOT EXISTS IDX_FileVersions_SnapshotId ON FileVersions(SnapshotId);
@@ -537,6 +542,35 @@ namespace xBackup
                 command.Parameters.AddWithValue("@running", SnapshotStatus.Running.ToString());
                 command.ExecuteNonQuery();
             }
+        }
+
+        public string? GetMetadata(string key)
+        {
+            return RunWithRetry(() =>
+            {
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT Value FROM Metadata WHERE Key = @key";
+                    command.Parameters.AddWithValue("@key", key);
+                    var val = command.ExecuteScalar();
+                    return val == null || val == DBNull.Value ? null : val.ToString();
+                }
+            });
+        }
+
+        public void SetMetadata(string key, string value)
+        {
+            RunWithRetry(() =>
+            {
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "INSERT OR REPLACE INTO Metadata (Key, Value) VALUES (@key, @value)";
+                    command.Parameters.AddWithValue("@key", key);
+                    command.Parameters.AddWithValue("@value", value);
+                    command.ExecuteNonQuery();
+                }
+                return true;
+            });
         }
 
         public void Dispose()
