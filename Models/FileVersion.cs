@@ -19,5 +19,6 @@ namespace xBackup.Models
         public DateTime LastWriteUtc { get; set; }
         public string? Hash { get; set; }
         public ChangeType ChangeType { get; set; }
+        public bool IsCorrupted { get; set; }
     }
 }

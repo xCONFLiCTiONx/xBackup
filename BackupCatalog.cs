@@ -81,6 +81,7 @@ namespace xBackup
                     LastWriteUtc TEXT,
                     Hash TEXT,
                     ChangeType TEXT NOT NULL,
+                    IsCorrupted INTEGER DEFAULT 0,
                     FOREIGN KEY (FileId) REFERENCES Files(Id),
                     FOREIGN KEY (SnapshotId) REFERENCES Snapshots(Id)
                 );
@@ -99,6 +100,14 @@ namespace xBackup
             {
                 command.CommandText = schema;
                 command.ExecuteNonQuery();
+
+                // Handle schema migrations (Add IsCorrupted if it doesn't exist)
+                try
+                {
+                    command.CommandText = "ALTER TABLE FileVersions ADD COLUMN IsCorrupted INTEGER DEFAULT 0;";
+                    command.ExecuteNonQuery();
+                }
+                catch { /* Column already exists */ }
             }
         }
 
@@ -204,7 +213,7 @@ namespace xBackup
                 using (var command = _connection.CreateCommand())
                 {
                     string sql = @"
-                        SELECT fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType
+                        SELECT fv.Id, fv.FileId, fv.SnapshotId, fv.BackupPath, fv.Size, fv.LastWriteUtc, fv.Hash, fv.ChangeType, fv.IsCorrupted
                         FROM FileVersions fv
                         JOIN Snapshots s ON fv.SnapshotId = s.Id
                         WHERE fv.FileId = @fileId AND s.Status = 'Complete'";
@@ -245,7 +254,8 @@ namespace xBackup
                                 Size = reader.GetInt64(4),
                                 LastWriteUtc = lastWrite,
                                 Hash = reader.IsDBNull(6) ? null : reader.GetString(6),
-                                ChangeType = Enum.Parse<ChangeType>(reader.GetString(7))
+                                ChangeType = Enum.Parse<ChangeType>(reader.GetString(7)),
+                                IsCorrupted = reader.GetInt32(8) == 1
                             };
                         }
                     }
@@ -261,8 +271,8 @@ namespace xBackup
                 using (var command = _connection.CreateCommand())
                 {
                     command.CommandText = @"
-                        INSERT INTO FileVersions (FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType)
-                        VALUES (@fileId, @snapId, @path, @size, @write, @hash, @type)";
+                        INSERT INTO FileVersions (FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType, IsCorrupted)
+                        VALUES (@fileId, @snapId, @path, @size, @write, @hash, @type, @isCorrupted)";
 
                     command.Parameters.AddWithValue("@fileId", version.FileId);
                     command.Parameters.AddWithValue("@snapId", version.SnapshotId);
@@ -271,6 +281,7 @@ namespace xBackup
                     command.Parameters.AddWithValue("@write", version.LastWriteUtc.ToString("O"));
                     command.Parameters.AddWithValue("@hash", (object?)version.Hash ?? DBNull.Value);
                     command.Parameters.AddWithValue("@type", version.ChangeType.ToString());
+                    command.Parameters.AddWithValue("@isCorrupted", version.IsCorrupted ? 1 : 0);
 
                     command.ExecuteNonQuery();
                 }
@@ -479,7 +490,7 @@ namespace xBackup
                 var list = new List<FileVersion>();
                 using (var command = _connection.CreateCommand())
                 {
-                    command.CommandText = "SELECT Id, FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType FROM FileVersions WHERE SnapshotId = @id";
+                    command.CommandText = "SELECT Id, FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType, IsCorrupted FROM FileVersions WHERE SnapshotId = @id";
                     command.Parameters.AddWithValue("@id", snapshotId);
                     using (var reader = command.ExecuteReader())
                     {
@@ -494,7 +505,8 @@ namespace xBackup
                                 Size = reader.GetInt64(4),
                                 LastWriteUtc = DateTime.Parse(reader.GetString(5)),
                                 Hash = reader.IsDBNull(6) ? null : reader.GetString(6),
-                                ChangeType = Enum.Parse<ChangeType>(reader.GetString(7))
+                                ChangeType = Enum.Parse<ChangeType>(reader.GetString(7)),
+                                IsCorrupted = reader.GetInt32(8) == 1
                             });
                         }
                     }
@@ -526,6 +538,20 @@ namespace xBackup
                     command.CommandText = "UPDATE FileVersions SET SnapshotId = @snapId, BackupPath = @path WHERE Id = @id";
                     command.Parameters.AddWithValue("@snapId", newSnapshotId);
                     command.Parameters.AddWithValue("@path", newBackupPath);
+                    command.Parameters.AddWithValue("@id", versionId);
+                    command.ExecuteNonQuery();
+                }
+                return true;
+            });
+        }
+
+        public void MarkVersionCorrupted(int versionId)
+        {
+            RunWithRetry(() =>
+            {
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "UPDATE FileVersions SET IsCorrupted = 1 WHERE Id = @id";
                     command.Parameters.AddWithValue("@id", versionId);
                     command.ExecuteNonQuery();
                 }

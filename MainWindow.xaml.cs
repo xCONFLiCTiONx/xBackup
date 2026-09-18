@@ -13,6 +13,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
+using Microsoft.Data.Sqlite;
 using xBackup.Models;
 
 namespace xBackup
@@ -36,6 +37,7 @@ namespace xBackup
         private static readonly Brush DefaultBrush = (Brush)new BrushConverter().ConvertFromString("#D4D4D4")!;
         private string _destinationRoot = @"F:\Backup\Home-PC";
         private bool _isProcessing = false;
+        private bool _isVerifying = false;
         private bool _isVhdxMountedManual = false;
         private bool _isClosingInProgress = false;
         private readonly bool _isSilentMode = false;
@@ -343,15 +345,22 @@ namespace xBackup
             SaveWindowPlacementSettings();
 
             // If the user clicks close button while background engine processing, minimize to system tray instead of aborting
-            if (_isProcessing)
+            if (_isProcessing || _isVerifying)
             {
                 e.Cancel = true;
                 Hide();
-                _notifyIcon?.ShowNotification("Engine Active", "The Backup or Restore execution is still running in the background system tray.");
+                string opName = _isProcessing ? "Backup or Restore" : "Integrity Verification";
+                _notifyIcon?.ShowNotification("Engine Active", $"The {opName} execution is still running in the background system tray.");
             }
             else
             {
-                if (_isVhdxMountedManual)
+                // Start by checking if we need to do anything. If so, show the UI.
+                string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
+
+                // Quick check for existing mounts
+                bool needsDismount = _isVhdxMountedManual || CheckVhdxMountStatus(vhdxPath) != "NotMounted";
+
+                if (needsDismount)
                 {
                     e.Cancel = true;
                     _isClosingInProgress = true;
@@ -360,11 +369,15 @@ namespace xBackup
                     TxtStatus.Foreground = Brushes.Yellow;
                     PrgWaiting.Visibility = Visibility.Visible;
 
-                    string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
+                    PrgBar.IsIndeterminate = true;
+                    TxtProgressDetails.Text = "Performing engine cleanup and container dismount...";
+                    TxtProgressDetails.Foreground = LinkBrush;
+
                     await Task.Run(() =>
                     {
                         try
                         {
+                            SqliteConnection.ClearAllPools();
                             DismountVhdx(vhdxPath);
                         }
                         catch { }
@@ -664,6 +677,7 @@ namespace xBackup
             _isProcessing = processing;
             BtnBackup.IsEnabled = !processing;
             BtnRestore.IsEnabled = !processing;
+            BtnVerify.IsEnabled = !processing;
             BtnToggleMount.IsEnabled = !processing;
             BtnStop.IsEnabled = processing;
             TxtStatus.Text = processing ? "Engine Status: Active" : "Engine Status: Ready";
@@ -1089,8 +1103,8 @@ namespace xBackup
                                     string oldFull = Path.Combine(mountedDrive, v.BackupPath);
                                     if (!File.Exists(oldFull)) continue;
 
-                                    // If this is the latest version, promote it to the NEW snapshot folder instead of re-copying from PC
-                                    if (!catalog.HasNewerVersion(v.FileId, oldSnap.Id))
+                                    // If this is the latest version and not marked as corrupted, promote it to the NEW snapshot folder
+                                    if (!v.IsCorrupted && !catalog.HasNewerVersion(v.FileId, oldSnap.Id))
                                     {
                                         try
                                         {
@@ -1231,7 +1245,7 @@ namespace xBackup
                         bool needsCopy = true;
                         ChangeType changeType = ChangeType.New;
 
-                        if (latestVersion != null && latestVersion.ChangeType != ChangeType.Deleted)
+                        if (latestVersion != null && latestVersion.ChangeType != ChangeType.Deleted && !latestVersion.IsCorrupted)
                         {
                             // Diagnostic logging for the first few files to identify why incremental might be failing
                             if (currentIndex <= 10)
@@ -1365,7 +1379,7 @@ namespace xBackup
 
                     if (_isSilentMode)
                     {
-                        CheckAndRunWeeklyIntegrity(catalog, mountedDrive);
+                        CheckAndRunWeeklyIntegrity(catalog, mountedDrive, cancellationToken);
                     }
             }
             catch (OperationCanceledException)
@@ -1557,6 +1571,16 @@ exit";
         {
             if (_isSilentMode) return;
 
+            if (_isVerifying)
+            {
+                _cts?.Cancel();
+                BtnVerify.IsEnabled = false;
+                AppendLog("Cancellation requested for integrity verification...", Brushes.Orange);
+                return;
+            }
+
+            if (_isProcessing) return;
+
             string destRoot = TxtDestRoot.Text;
             if (string.IsNullOrEmpty(destRoot))
             {
@@ -1564,13 +1588,23 @@ exit";
                 return;
             }
 
-            BtnVerify.IsEnabled = false;
+            _isVerifying = true;
+            BtnVerify.Content = "Stop Verification";
+            BtnVerify.Background = new SolidColorBrush(Color.FromRgb(180, 50, 50));
+
+            // Disable other action buttons while verifying
+            BtnBackup.IsEnabled = false;
+            BtnRestore.IsEnabled = false;
+            BtnToggleMount.IsEnabled = false;
+
             AppendLog("Starting Bit Rot Integrity Verification...", Brushes.DeepSkyBlue);
 
             // Immediate UI feedback
             PrgBar.IsIndeterminate = true;
             TxtProgressDetails.Text = "Initializing Integrity Engine (Mounting VHDX)...";
             TxtProgressDetails.Foreground = LinkBrush;
+
+            _cts = new System.Threading.CancellationTokenSource();
 
             try
             {
@@ -1588,7 +1622,7 @@ exit";
 
                     using var catalog = new BackupCatalog(dbPath);
 
-                    int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive);
+                    int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive, _cts.Token);
 
                     if (corruptCount == 0)
                     {
@@ -1596,9 +1630,27 @@ exit";
                     }
                     else
                     {
-                        AppendLog($"Integrity Check Complete: {corruptCount} issues found!", Brushes.Red);
+                        AppendLog($"Integrity Check Complete: {corruptCount} issues found! Corrupted files will be re-synced in the next backup.", Brushes.Red);
                     }
-                });
+
+                    // Release DB locks explicitly before dismount
+                    catalog.Dispose();
+
+                    try
+                    {
+                        AppendLog("Integrity cycle finished. Detaching VHDX...", Brushes.DeepSkyBlue);
+                        DismountVhdx(vhdxPath);
+                        AppendLog("VHDX safely detached.", Brushes.LightGreen);
+                    }
+                    catch (Exception dex)
+                    {
+                        AppendLog($"Dismount failed: {dex.Message}", Brushes.Orange);
+                    }
+                }, _cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                AppendLog("Integrity verification aborted by user.", Brushes.Orange);
             }
             catch (Exception ex)
             {
@@ -1606,13 +1658,28 @@ exit";
             }
             finally
             {
+                _isVerifying = false;
                 BtnVerify.IsEnabled = true;
+                BtnVerify.Content = "Verify Integrity...";
+                BtnVerify.Background = (Brush)new BrushConverter().ConvertFromString("#3E3E42")!;
+
+                // Restore other action buttons
+                BtnBackup.IsEnabled = true;
+                BtnRestore.IsEnabled = true;
+                BtnToggleMount.IsEnabled = true;
+
                 PrgBar.IsIndeterminate = false;
                 PrgBar.Value = 0;
+                _currentFilePath = null;
+                TxtProgressDetails.Foreground = DefaultBrush;
+                TxtProgressDetails.Text = "Verification Operation Finished";
+
+                _cts?.Dispose();
+                _cts = null;
             }
         }
 
-        private void CheckAndRunWeeklyIntegrity(BackupCatalog catalog, string mountedDrive)
+        private void CheckAndRunWeeklyIntegrity(BackupCatalog catalog, string mountedDrive, System.Threading.CancellationToken cancellationToken)
         {
             try
             {
@@ -1624,13 +1691,14 @@ exit";
                 if ((DateTime.UtcNow - lastCheck).TotalDays >= 7)
                 {
                     AppendLog("Automated Weekly Integrity Check Triggered...", Brushes.DeepSkyBlue);
-                    int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive);
+                    int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive, cancellationToken);
 
                     catalog.SetMetadata("LastIntegrityCheckUtc", DateTime.UtcNow.ToString("O"));
 
                     if (corruptCount > 0)
                     {
-                        _notifyIcon?.ShowNotification("Bit Rot Detected!", $"Automated integrity check found {corruptCount} corruptions in your backup.");
+                        AppendLog($"Automated integrity check found {corruptCount} issues. These will be healed in the next backup cycle.", Brushes.Orange);
+                        _notifyIcon?.ShowNotification("Bit Rot Detected!", $"Automated integrity check found {corruptCount} corruptions in your backup. Self-healing is scheduled.");
                     }
                     else
                     {
@@ -1644,7 +1712,7 @@ exit";
             }
         }
 
-        private int PerformIntegrityCheckInternal(BackupCatalog catalog, string mountedDrive)
+        private int PerformIntegrityCheckInternal(BackupCatalog catalog, string mountedDrive, System.Threading.CancellationToken cancellationToken)
         {
             var snapshots = catalog.GetCompletedSnapshots();
             if (snapshots.Count == 0) return 0;
@@ -1659,19 +1727,34 @@ exit";
             int checkedCount = 0;
             int corruptCount = 0;
 
-            Dispatcher.Invoke(() =>
+            if (!_isSilentMode)
             {
-                PrgBar.IsIndeterminate = false;
-                PrgBar.Maximum = total;
-                PrgBar.Value = 0;
-                TxtProgressDetails.Foreground = LinkBrush;
-            });
+                Dispatcher.Invoke(() =>
+                {
+                    PrgBar.IsIndeterminate = false;
+                    PrgBar.Maximum = total;
+                    PrgBar.Value = 0;
+                    TxtProgressDetails.Foreground = LinkBrush;
+                });
+            }
 
             foreach (var v in allVersions)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (string.IsNullOrEmpty(v.BackupPath) || v.ChangeType == ChangeType.Deleted) continue;
 
                 string physicalPath = Path.Combine(mountedDrive, v.BackupPath);
+
+                if (!_isSilentMode)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        _currentFilePath = physicalPath;
+                        TxtProgressDetails.Text = $"Verifying Integrity: [{checkedCount + 1:N0}/{total:N0}] {Path.GetFileName(v.BackupPath)}";
+                    });
+                }
+
                 if (File.Exists(physicalPath))
                 {
                     if (!string.IsNullOrEmpty(v.Hash))
@@ -1680,6 +1763,7 @@ exit";
                         if (currentHash != v.Hash)
                         {
                             AppendLog($"!!! BIT ROT DETECTED: {v.BackupPath} (Expected: {v.Hash}, Actual: {currentHash})", Brushes.Red);
+                            catalog.MarkVersionCorrupted(v.Id);
                             corruptCount++;
                         }
                     }
@@ -1689,17 +1773,20 @@ exit";
                     // For automated check, missing files are a concern but not technically bit rot.
                     // We'll count them as corruptions for notification purposes.
                     AppendLog($"Missing file during integrity check: {v.BackupPath}", Brushes.Orange);
+                    catalog.MarkVersionCorrupted(v.Id);
                     corruptCount++;
                 }
 
                 checkedCount++;
                 if (checkedCount % 20 == 0 || checkedCount == total)
                 {
-                    Dispatcher.Invoke(() =>
+                    if (!_isSilentMode)
                     {
-                        PrgBar.Value = checkedCount;
-                        TxtProgressDetails.Text = $"Verifying Integrity: [{checkedCount:N0}/{total:N0}] {Path.GetFileName(v.BackupPath)}";
-                    });
+                        Dispatcher.Invoke(() =>
+                        {
+                            PrgBar.Value = checkedCount;
+                        });
+                    }
 
                     if (checkedCount % 100 == 0 || checkedCount == total)
                     {
