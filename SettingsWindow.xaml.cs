@@ -72,7 +72,6 @@ namespace xBackup
 
                 GlobalExclusions.UpdateSettings(newExclusions, selectedDrives, rentDays);
 
-                MessageBox.Show("Backup settings and exclusions updated and saved successfully.", "Settings Saved", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }
             catch (Exception ex)

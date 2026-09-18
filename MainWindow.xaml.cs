@@ -457,7 +457,6 @@ namespace xBackup
             {
                 TaskSchedulerHelper.DeleteBackupTask();
                 UpdateTaskSchedulerStatus();
-                MessageBox.Show("Automated daily backup task removed completely from Windows Task Scheduler.", "Task Removed", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {
@@ -470,11 +469,7 @@ namespace xBackup
                 bool success = TaskSchedulerHelper.CreateDailyBackupTask();
                 UpdateTaskSchedulerStatus();
 
-                if (success)
-                {
-                    MessageBox.Show("Successfully created a high-integrity daily backup task triggered at 12:00 AM Midnight. The system settings include WakeToRun to wake your device from sleep mode.", "Task Registered", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                else
+                if (!success)
                 {
                     MessageBox.Show("Failed to create the task configuration. Make sure you are running as administrator and executing the actual standalone compiled .exe file.", "Scheduling Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
