@@ -1512,10 +1512,15 @@ exit";
             }
         }
 
-        private static void CompressFileTransparently(string filePath)
+        private void CompressFileTransparently(string filePath)
         {
             try
             {
+                string ext = Path.GetExtension(filePath).ToLowerInvariant();
+                string[] skipExtensions = { ".zip", ".7z", ".rar", ".gz", ".iso", ".png", ".jpg", ".jpeg", ".mp4", ".mov", ".mp3", ".exe", ".msi" };
+
+                if (skipExtensions.Contains(ext)) return;
+
                 // CompactOS (WOF) LZX compression - Very high ratio, transparent, kernel-level.
                 // Does not affect how files are navigated.
                 var startInfo = new ProcessStartInfo
@@ -1525,9 +1530,18 @@ exit";
                     CreateNoWindow = true,
                     UseShellExecute = false
                 };
-                Process.Start(startInfo)?.WaitForExit();
+                var process = Process.Start(startInfo);
+                process?.WaitForExit();
+
+                if (process?.ExitCode != 0)
+                {
+                    AppendLog($"Warning: Compression failed for {Path.GetFileName(filePath)} (Exit Code: {process?.ExitCode})", Brushes.Orange);
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AppendLog($"Warning: Compression engine error: {ex.Message}", Brushes.Orange);
+            }
         }
 
         private static string CalculateHash(string filePath)
