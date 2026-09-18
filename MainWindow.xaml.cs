@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -1284,15 +1286,34 @@ namespace xBackup
                                 Directory.CreateDirectory(parentDir);
                             }
 
-                            File.Copy(file, tempFilePath, overwrite: true);
-                            var tempFi = new FileInfo(tempFilePath);
-                            if (!tempFi.Exists || tempFi.Length != sourceFi.Length)
+                            string hash = string.Empty;
+                            using (var sourceStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            using (var destStream = new FileStream(tempFilePath, FileMode.Create, FileAccess.Write))
+                            using (var sha256 = SHA256.Create())
                             {
-                                throw new IOException("Verification failed: Copied file size does not match source file size.");
+                                byte[] buffer = new byte[81920]; // 80KB buffer
+                                int bytesRead;
+                                long totalRead = 0;
+                                while ((bytesRead = sourceStream.Read(buffer, 0, buffer.Length)) > 0)
+                                {
+                                    sha256.TransformBlock(buffer, 0, bytesRead, buffer, 0);
+                                    destStream.Write(buffer, 0, bytesRead);
+                                    totalRead += bytesRead;
+                                }
+                                sha256.TransformFinalBlock(buffer, 0, 0);
+                                hash = BitConverter.ToString(sha256.Hash!).Replace("-", "").ToLowerInvariant();
+
+                                if (totalRead != sourceFi.Length)
+                                {
+                                    throw new IOException("Verification failed: Copied file size does not match source file size.");
+                                }
                             }
 
                             File.Move(tempFilePath, destFilePath, overwrite: true);
                             File.SetLastWriteTimeUtc(destFilePath, sourceFi.LastWriteTimeUtc);
+
+                            // Apply Transparent Compression (WOF / CompactOS LZX)
+                            CompressFileTransparently(destFilePath);
 
                             // Record in catalog
                             catalog.AddFileVersion(new FileVersion
@@ -1302,6 +1323,7 @@ namespace xBackup
                                 BackupPath = Path.Combine(snapshotFolderName, relativeStructurePath),
                                 Size = sourceFi.Length,
                                 LastWriteUtc = sourceFi.LastWriteTimeUtc,
+                                Hash = hash,
                                 ChangeType = changeType
                             });
 
@@ -1496,8 +1518,128 @@ exit";
             }
         }
 
-        private static void RunDiskpartScript(string scriptContent)
+        private void CompressFileTransparently(string filePath)
         {
+            try
+            {
+                // CompactOS (WOF) LZX compression - Very high ratio, transparent, kernel-level.
+                // Does not affect how files are navigated.
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "compact.exe",
+                    Arguments = $"/c /i /exe:lzx \"{filePath}\"",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+                Process.Start(startInfo)?.WaitForExit();
+            }
+            catch { }
+        }
+
+        private string CalculateHash(string filePath)
+        {
+            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        private async void BtnVerify_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isSilentMode) return;
+
+            string destRoot = TxtDestRoot.Text;
+            if (string.IsNullOrEmpty(destRoot))
+            {
+                MessageBox.Show("Please select a backup destination first.");
+                return;
+            }
+
+            BtnVerify.IsEnabled = false;
+            AppendLog("Starting Bit Rot Integrity Verification...", Brushes.DeepSkyBlue);
+
+            try
+            {
+                await Task.Run(() =>
+                {
+                    string vhdxPath = Path.Combine(destRoot, "BackupDev.vhdx");
+                    if (!File.Exists(vhdxPath))
+                    {
+                        AppendLog("Error: Backup container not found.", Brushes.Red);
+                        return;
+                    }
+
+                    string mountedDrive = MountVhdxAndGetLetter(vhdxPath);
+                    string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
+
+                    using (var catalog = new BackupCatalog(dbPath))
+                    {
+                        var snapshots = catalog.GetCompletedSnapshots();
+                        if (snapshots.Count == 0)
+                        {
+                            AppendLog("No completed snapshots found to verify.", Brushes.Yellow);
+                            return;
+                        }
+
+                        // Verify latest snapshot for brevity, or all if you prefer.
+                        // Let's verify all files in the catalog for maximum protection.
+                        var allVersions = new List<FileVersion>();
+                        foreach(var snap in snapshots)
+                        {
+                            allVersions.AddRange(catalog.GetFileVersionsForSnapshot(snap.Id));
+                        }
+
+                        int total = allVersions.Count(v => !string.IsNullOrEmpty(v.BackupPath) && v.ChangeType != ChangeType.Deleted);
+                        int checkedCount = 0;
+                        int corruptCount = 0;
+
+                        foreach (var v in allVersions)
+                        {
+                            if (string.IsNullOrEmpty(v.BackupPath) || v.ChangeType == ChangeType.Deleted) continue;
+
+                            string physicalPath = Path.Combine(mountedDrive, v.BackupPath);
+                            if (File.Exists(physicalPath))
+                            {
+                                string currentHash = CalculateHash(physicalPath);
+                                if (currentHash != v.Hash)
+                                {
+                                    AppendLog($"!!! BIT ROT DETECTED: {v.BackupPath}", Brushes.Red);
+                                    corruptCount++;
+                                }
+                            }
+                            else
+                            {
+                                AppendLog($"Missing file: {v.BackupPath}", Brushes.Orange);
+                            }
+
+                            checkedCount++;
+                            if (checkedCount % 50 == 0 || checkedCount == total)
+                            {
+                                AppendLog($"Verified {checkedCount}/{total} files...", Brushes.Gray);
+                            }
+                        }
+
+                        if (corruptCount == 0)
+                        {
+                            AppendLog("Integrity Check Complete: All files verified successfully. No bit rot detected.", Brushes.LightGreen);
+                        }
+                        else
+                        {
+                            AppendLog($"Integrity Check Complete: {corruptCount} corruptions found!", Brushes.Red);
+                        }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Verification failed: {ex.Message}", Brushes.Red);
+            }
+            finally
+            {
+                BtnVerify.IsEnabled = true;
+            }
+        }
             string scriptPath = Path.Combine(Path.GetTempPath(), $"vhdx_op_{Guid.NewGuid()}.txt");
             File.WriteAllText(scriptPath, scriptContent);
 
