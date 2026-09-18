@@ -467,6 +467,67 @@ namespace xBackup
             }
             return null;
         }
+        public List<FileVersion> GetFileVersionsForSnapshot(int snapshotId)
+        {
+            return RunWithRetry(() =>
+            {
+                var list = new List<FileVersion>();
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT Id, FileId, SnapshotId, BackupPath, Size, LastWriteUtc, Hash, ChangeType FROM FileVersions WHERE SnapshotId = @id";
+                    command.Parameters.AddWithValue("@id", snapshotId);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            list.Add(new FileVersion
+                            {
+                                Id = reader.GetInt32(0),
+                                FileId = reader.GetInt32(1),
+                                SnapshotId = reader.GetInt32(2),
+                                BackupPath = reader.IsDBNull(3) ? null : reader.GetString(3),
+                                Size = reader.GetInt64(4),
+                                LastWriteUtc = DateTime.Parse(reader.GetString(5)),
+                                Hash = reader.IsDBNull(6) ? null : reader.GetString(6),
+                                ChangeType = Enum.Parse<ChangeType>(reader.GetString(7))
+                            });
+                        }
+                    }
+                }
+                return list;
+            });
+        }
+
+        public bool HasNewerVersion(int fileId, int snapshotId)
+        {
+            return RunWithRetry(() =>
+            {
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT COUNT(*) FROM FileVersions WHERE FileId = @fileId AND SnapshotId > @snapId";
+                    command.Parameters.AddWithValue("@fileId", fileId);
+                    command.Parameters.AddWithValue("@snapId", snapshotId);
+                    return Convert.ToInt32(command.ExecuteScalar()) > 0;
+                }
+            });
+        }
+
+        public void UpdateVersionLocation(int versionId, int newSnapshotId, string newBackupPath)
+        {
+            RunWithRetry(() =>
+            {
+                using (var command = _connection.CreateCommand())
+                {
+                    command.CommandText = "UPDATE FileVersions SET SnapshotId = @snapId, BackupPath = @path WHERE Id = @id";
+                    command.Parameters.AddWithValue("@snapId", newSnapshotId);
+                    command.Parameters.AddWithValue("@path", newBackupPath);
+                    command.Parameters.AddWithValue("@id", versionId);
+                    command.ExecuteNonQuery();
+                }
+                return true;
+            });
+        }
+
         public void MarkAbandonedSnapshotsFailed()
         {
             using (var command = _connection.CreateCommand())

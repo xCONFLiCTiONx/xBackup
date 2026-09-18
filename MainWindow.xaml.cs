@@ -1072,6 +1072,77 @@ namespace xBackup
                     Directory.CreateDirectory(activeSnapshotDir);
                     AppendLog($"Created unique daily snapshot target folder: {snapshotFolderName}", Brushes.DeepSkyBlue);
 
+                    // --- History Retention Window Pruning Step (Smart Migration) ---
+                    try
+                    {
+                        AppendLog($"Evaluating history retention policy rules ({GlobalExclusions.RetentionDays} days maximum limit)...", Brushes.DeepSkyBlue);
+                        var snapshots = catalog.GetCompletedSnapshots();
+                        int prunedFoldersCount = 0;
+                        int promotedFilesCount = 0;
+
+                        foreach (var oldSnap in snapshots)
+                        {
+                            if ((DateTime.Today - oldSnap.SnapshotDate).TotalDays > GlobalExclusions.RetentionDays)
+                            {
+                                AppendLog($"Processing expired snapshot for smart pruning: {oldSnap.SnapshotDate:yyyy-MM-dd}", Brushes.Orange);
+
+                                var versions = catalog.GetFileVersionsForSnapshot(oldSnap.Id);
+                                foreach (var v in versions)
+                                {
+                                    if (v.ChangeType == ChangeType.Deleted || string.IsNullOrEmpty(v.BackupPath)) continue;
+
+                                    string oldFull = Path.Combine(mountedDrive, v.BackupPath);
+                                    if (!File.Exists(oldFull)) continue;
+
+                                    // If this is the latest version, promote it to the NEW snapshot folder instead of re-copying from PC
+                                    if (!catalog.HasNewerVersion(v.FileId, oldSnap.Id))
+                                    {
+                                        try
+                                        {
+                                            // Extract relative path inside snapshot folder
+                                            int firstSlash = v.BackupPath.IndexOf(Path.DirectorySeparatorChar);
+                                            if (firstSlash == -1) firstSlash = v.BackupPath.IndexOf('/');
+
+                                            if (firstSlash != -1)
+                                            {
+                                                string relativeSubPath = v.BackupPath.Substring(firstSlash + 1);
+                                                string newRelative = Path.Combine(snapshotFolderName, relativeSubPath);
+                                                string newFull = Path.Combine(mountedDrive, newRelative);
+
+                                                string? parent = Path.GetDirectoryName(newFull);
+                                                if (parent != null && !Directory.Exists(parent)) Directory.CreateDirectory(parent);
+
+                                                File.Move(oldFull, newFull, true);
+                                                catalog.UpdateVersionLocation(v.Id, snapshot.Id, newRelative);
+                                                promotedFilesCount++;
+                                            }
+                                        }
+                                        catch { }
+                                    }
+                                }
+
+                                string datePattern = $"Snapshot_{oldSnap.SnapshotDate:yyyy-MM-dd}*";
+                                var dirs = Directory.GetDirectories(mountedDrive, datePattern);
+                                foreach (var dir in dirs)
+                                {
+                                    try { Directory.Delete(dir, true); } catch { }
+                                }
+
+                                catalog.DeleteSnapshot(oldSnap.Id);
+                                prunedFoldersCount++;
+                            }
+                        }
+
+                        if (prunedFoldersCount > 0)
+                        {
+                            AppendLog($"Retention cycle complete. Discarded {prunedFoldersCount} expired snapshots. Smart-migrated {promotedFilesCount:N0} current files to avoid re-copying.", Brushes.LightGreen);
+                        }
+                    }
+                    catch (Exception rentEx)
+                    {
+                        AppendLog($"Warning: History retention encountered issues ({rentEx.Message})", Brushes.Orange);
+                    }
+
                     _errorDetailsReport.Clear();
                     long totalScannedCount = 0;
 
@@ -1277,38 +1348,6 @@ namespace xBackup
                     catalog.UpdateSnapshotStatus(snapshot.Id, SnapshotStatus.Complete);
                     AppendLog($"Backup cycle finished. Copied {backedUpCount:N0} files. {upToDateCount:N0} were up-to-date. {purgedFilesCount:N0} deletions recorded.", Brushes.LightGreen);
 
-                    // --- History Retention Window Pruning Step ---
-                    try
-                    {
-                        AppendLog($"Evaluating history retention policy rules ({GlobalExclusions.RetentionDays} days maximum limit)...", Brushes.DeepSkyBlue);
-                        var snapshots = catalog.GetCompletedSnapshots();
-                        int prunedFoldersCount = 0;
-                        foreach (var snap in snapshots)
-                        {
-                            if ((DateTime.Today - snap.SnapshotDate).TotalDays > GlobalExclusions.RetentionDays)
-                            {
-                                AppendLog($"Pruning expired historical data snapshot: {snap.SnapshotDate:yyyy-MM-dd}", Brushes.Orange);
-
-                                string datePattern = $"Snapshot_{snap.SnapshotDate:yyyy-MM-dd}*";
-                                var dirs = Directory.GetDirectories(mountedDrive, datePattern);
-                                foreach (var dir in dirs)
-                                {
-                                    try { Directory.Delete(dir, true); } catch { }
-                                }
-
-                                catalog.DeleteSnapshot(snap.Id);
-                                prunedFoldersCount++;
-                            }
-                        }
-                        if (prunedFoldersCount > 0)
-                        {
-                            AppendLog($"Retention cycle complete. Discarded {prunedFoldersCount} expired snapshots.", Brushes.LightGreen);
-                        }
-                    }
-                    catch (Exception rentEx)
-                    {
-                        AppendLog($"Warning: History retention encountered issues ({rentEx.Message})", Brushes.Orange);
-                    }
                 } // Catalog is disposed here explicitly
             }
             catch (OperationCanceledException)
