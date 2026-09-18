@@ -1567,6 +1567,11 @@ exit";
             BtnVerify.IsEnabled = false;
             AppendLog("Starting Bit Rot Integrity Verification...", Brushes.DeepSkyBlue);
 
+            // Immediate UI feedback
+            PrgBar.IsIndeterminate = true;
+            TxtProgressDetails.Text = "Initializing Integrity Engine (Mounting VHDX)...";
+            TxtProgressDetails.Foreground = LinkBrush;
+
             try
             {
                 await Task.Run(() =>
@@ -1602,6 +1607,8 @@ exit";
             finally
             {
                 BtnVerify.IsEnabled = true;
+                PrgBar.IsIndeterminate = false;
+                PrgBar.Value = 0;
             }
         }
 
@@ -1652,6 +1659,14 @@ exit";
             int checkedCount = 0;
             int corruptCount = 0;
 
+            Dispatcher.Invoke(() =>
+            {
+                PrgBar.IsIndeterminate = false;
+                PrgBar.Maximum = total;
+                PrgBar.Value = 0;
+                TxtProgressDetails.Foreground = LinkBrush;
+            });
+
             foreach (var v in allVersions)
             {
                 if (string.IsNullOrEmpty(v.BackupPath) || v.ChangeType == ChangeType.Deleted) continue;
@@ -1678,11 +1693,26 @@ exit";
                 }
 
                 checkedCount++;
-                if (checkedCount % 100 == 0 || checkedCount == total)
+                if (checkedCount % 20 == 0 || checkedCount == total)
                 {
-                    AppendLog($"Verified {checkedCount}/{total} files...", Brushes.Gray);
+                    Dispatcher.Invoke(() =>
+                    {
+                        PrgBar.Value = checkedCount;
+                        TxtProgressDetails.Text = $"Verifying Integrity: [{checkedCount:N0}/{total:N0}] {Path.GetFileName(v.BackupPath)}";
+                    });
+
+                    if (checkedCount % 100 == 0 || checkedCount == total)
+                    {
+                        AppendLog($"Verified {checkedCount}/{total} files...", Brushes.Gray);
+                    }
                 }
             }
+
+            Dispatcher.Invoke(() =>
+            {
+                TxtProgressDetails.Text = "Integrity Check Finished";
+                TxtProgressDetails.Foreground = DefaultBrush;
+            });
 
             return corruptCount;
         }
