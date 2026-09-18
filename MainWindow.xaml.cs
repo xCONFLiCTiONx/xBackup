@@ -20,11 +20,12 @@ namespace xBackup
     public partial class MainWindow : Window
     {
         // Windows Power Management API P/Invoke definitions to keep PC awake
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern uint SetThreadExecutionState(uint esFlags);
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        private static partial uint SetThreadExecutionState(uint esFlags);
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+        [LibraryImport("kernel32.dll", EntryPoint = "CreateHardLinkW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static partial bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 
         private const uint ES_CONTINUOUS = 0x80000000;
         private const uint ES_SYSTEM_REQUIRED = 0x00000001;
@@ -39,7 +40,7 @@ namespace xBackup
         private bool _isClosingInProgress = false;
         private readonly bool _isSilentMode = false;
         private H.NotifyIcon.TaskbarIcon? _notifyIcon;
-        private readonly List<string> _errorDetailsReport = new List<string>();
+        private readonly List<string> _errorDetailsReport = [];
         private System.Threading.CancellationTokenSource? _cts;
 
         public class BackupCheckpoint
@@ -54,12 +55,10 @@ namespace xBackup
             public long TotalBytesMirrored { get; set; }
         }
 
-        public class RelayCommand : System.Windows.Input.ICommand
+        public class RelayCommand(Action execute) : System.Windows.Input.ICommand
         {
-            private readonly Action _execute;
-            public RelayCommand(Action execute) => _execute = execute;
             public bool CanExecute(object? parameter) => true;
-            public void Execute(object? parameter) => _execute();
+            public void Execute(object? parameter) => execute();
             public event EventHandler? CanExecuteChanged { add { } remove { } }
         }
 
@@ -86,10 +85,8 @@ namespace xBackup
                         RedirectStandardOutput = true,
                         RedirectStandardError = true
                     };
-                    using (var process = Process.Start(startInfo))
-                    {
-                        process?.WaitForExit();
-                    }
+                    using var process = Process.Start(startInfo);
+                    process?.WaitForExit();
                 }
                 catch { }
             });
@@ -174,7 +171,7 @@ namespace xBackup
             public bool IsMaximized { get; set; } = false;
         }
 
-        private string GetConfigFilePath()
+        private static string GetConfigFilePath()
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string folder = Path.Combine(appData, "SmartBackupEngine");
@@ -182,7 +179,7 @@ namespace xBackup
             return Path.Combine(folder, "window_placement.json");
         }
 
-        private string GetCheckpointFilePath()
+        private static string GetCheckpointFilePath()
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string folder = Path.Combine(appData, "SmartBackupEngine");
@@ -753,11 +750,8 @@ namespace xBackup
             }
             finally
             {
-                if (_cts != null)
-                {
-                    _cts.Dispose();
-                    _cts = null;
-                }
+                _cts?.Dispose();
+                _cts = null;
                 SetUiState(processing: false);
             }
         }
@@ -767,7 +761,7 @@ namespace xBackup
             var restoreErrors = new List<string>();
             try
             {
-                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+                _ = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
                 AppendLog($"Initializing Catalog Restore for {filesToRestore.Count:N0} files...", Brushes.DeepSkyBlue);
 
                 string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
@@ -816,7 +810,7 @@ namespace xBackup
             }
             finally
             {
-                SetThreadExecutionState(ES_CONTINUOUS);
+                _ = SetThreadExecutionState(ES_CONTINUOUS);
                 Dispatcher.Invoke(() =>
                 {
                     TxtProgressDetails.Text = "Restore Operation Finished";
@@ -828,7 +822,7 @@ namespace xBackup
 
         private void RunLegacyRestoreEngine(string snapshotPath, string targetPath, bool overwrite, System.Threading.CancellationToken cancellationToken)
         {
-            List<string> filesToRestore = new List<string>();
+            List<string> filesToRestore = [];
             long restoredCount = 0;
             long skippedCount = 0;
             long errorCount = 0;
@@ -836,7 +830,7 @@ namespace xBackup
 
             try
             {
-                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+                _ = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
                 AppendLog("Initializing Legacy Restore Lifecycle...", Brushes.DeepSkyBlue);
 
                 _errorDetailsReport.Clear();
@@ -881,7 +875,7 @@ namespace xBackup
 
                     try
                     {
-                        FileInfo sourceFi = new FileInfo(file);
+                        FileInfo sourceFi = new(file);
                         if (File.Exists(destPath))
                         {
                             if (!overwrite)
@@ -934,7 +928,7 @@ namespace xBackup
             finally
             {
                 WriteRestoreReport(snapshotPath, targetPath, overwrite, filesToRestore.Count, restoredCount, skippedCount, errorCount, totalBytesRestored);
-                SetThreadExecutionState(ES_CONTINUOUS);
+                _ = SetThreadExecutionState(ES_CONTINUOUS);
             }
         }
 
@@ -948,7 +942,7 @@ namespace xBackup
                 string logFileName = $"RestoreReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
                 string fullLogPath = Path.Combine(historyDir, logFileName);
 
-                using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
+                using var sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8);
                 {
                     sw.WriteLine("==========================================================================");
                     sw.WriteLine($"PERSONAL BACKUP ENGINE RESTORE EXECUTION REPORT");
@@ -995,7 +989,7 @@ namespace xBackup
             });
         }
 
-        private void DiscoverFilesForRestore(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
+        private static void DiscoverFilesForRestore(string currentDir, List<string> files, ref long scannedCount, System.Threading.CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1024,7 +1018,7 @@ namespace xBackup
             string mountedDrive = string.Empty;
             bool newlyMounted = false;
 
-            List<string> filesToProcess = new List<string>();
+            List<string> filesToProcess = [];
             long backedUpCount = checkpoint?.BackedUpCount ?? 0;
             long upToDateCount = checkpoint?.UpToDateCount ?? 0;
             long lockedCount = checkpoint?.LockedCount ?? 0;
@@ -1033,7 +1027,7 @@ namespace xBackup
 
             try
             {
-                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+                _ = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
                 AppendLog(checkpoint == null ? "Initializing Automated Snapshot Lifecycle..." : "Resuming Snapshot Lifecycle...", Brushes.DeepSkyBlue);
 
                 if (!Directory.Exists(destRoot))
@@ -1061,9 +1055,8 @@ namespace xBackup
 
                 // Initialize Catalog
                 string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
-                using (var catalog = new BackupCatalog(dbPath))
-                {
-                    catalog.MarkAbandonedSnapshotsFailed();
+                using var catalog = new BackupCatalog(dbPath);
+                catalog.MarkAbandonedSnapshotsFailed();
 
                     // --- Establish Snapshot Target Architecture ---
                     string nowString = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
@@ -1107,7 +1100,7 @@ namespace xBackup
 
                                             if (firstSlash != -1)
                                             {
-                                                string relativeSubPath = v.BackupPath.Substring(firstSlash + 1);
+                                                string relativeSubPath = v.BackupPath[(firstSlash + 1)..];
                                                 string newRelative = Path.Combine(snapshotFolderName, relativeSubPath);
                                                 string newFull = Path.Combine(mountedDrive, newRelative);
 
@@ -1369,8 +1362,6 @@ namespace xBackup
 
                     catalog.UpdateSnapshotStatus(snapshot.Id, SnapshotStatus.Complete);
                     AppendLog($"Backup cycle finished. Copied {backedUpCount:N0} files. {upToDateCount:N0} were up-to-date. {purgedFilesCount:N0} deletions recorded.", Brushes.LightGreen);
-
-                } // Catalog is disposed here explicitly
             }
             catch (OperationCanceledException)
             {
@@ -1402,11 +1393,11 @@ namespace xBackup
                         Dispatcher.Invoke(() => PrgWaiting.Visibility = Visibility.Collapsed);
                     }
                 }
-                SetThreadExecutionState(ES_CONTINUOUS);
+                _ = SetThreadExecutionState(ES_CONTINUOUS);
             }
         }
 
-        private void WriteBackupReport(string destRoot, long totalScannedCount, long backedUpCount, long upToDateCount, long lockedCount, long purgedFilesCount, long purgedDirsCount, long totalBytesMirrored)
+        private void WriteBackupReport(string destRoot, long totalScannedCount, long backedUpCount, long upToDateCount, long lockedCount, long purgedFilesCount, long _, long totalBytesMirrored)
         {
             try
             {
@@ -1416,35 +1407,33 @@ namespace xBackup
                 string logFileName = $"BackupReport_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
                 string fullLogPath = Path.Combine(historyDir, logFileName);
 
-                using (StreamWriter sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8))
-                {
-                    sw.WriteLine("==========================================================================");
-                    sw.WriteLine($"PERSONAL BACKUP ENGINE HISTORICAL EXECUTION REPORT (SQLITE SNAPSHOT)");
-                    sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-                    sw.WriteLine("==========================================================================");
-                    sw.WriteLine($"Total Files Scanned:               {totalScannedCount:N0}");
-                    sw.WriteLine($"Successfully Copied (New/Modified) : {backedUpCount:N0}");
-                    sw.WriteLine($"Up-to-Date (Skipped Unchanged)     : {upToDateCount:N0}");
-                    sw.WriteLine($"Locked / Bypassed System Files      : {lockedCount:N0}");
-                    sw.WriteLine($"Files Marked as Deleted            : {purgedFilesCount:N0}");
-                    sw.WriteLine($"Total Sizing Streamed This Session : {FormatBytes(totalBytesMirrored)}");
-                    sw.WriteLine("==========================================================================");
+                using var sw = new StreamWriter(fullLogPath, false, System.Text.Encoding.UTF8);
+                sw.WriteLine("==========================================================================");
+                sw.WriteLine($"PERSONAL BACKUP ENGINE HISTORICAL EXECUTION REPORT (SQLITE SNAPSHOT)");
+                sw.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                sw.WriteLine("==========================================================================");
+                sw.WriteLine($"Total Files Scanned:               {totalScannedCount:N0}");
+                sw.WriteLine($"Successfully Copied (New/Modified) : {backedUpCount:N0}");
+                sw.WriteLine($"Up-to-Date (Skipped Unchanged)     : {upToDateCount:N0}");
+                sw.WriteLine($"Locked / Bypassed System Files      : {lockedCount:N0}");
+                sw.WriteLine($"Files Marked as Deleted            : {purgedFilesCount:N0}");
+                sw.WriteLine($"Total Sizing Streamed This Session : {FormatBytes(totalBytesMirrored)}");
+                sw.WriteLine("==========================================================================");
 
-                    if (_errorDetailsReport.Count > 0)
+                if (_errorDetailsReport.Count > 0)
+                {
+                    sw.WriteLine();
+                    sw.WriteLine("BYPASSED FILES REPORT SUMMARY DETAILS (ACCESS-LOCKED / PROTECTED):");
+                    sw.WriteLine("--------------------------------------------------------------------------");
+                    foreach (var errItem in _errorDetailsReport)
                     {
-                        sw.WriteLine();
-                        sw.WriteLine("BYPASSED FILES REPORT SUMMARY DETAILS (ACCESS-LOCKED / PROTECTED):");
-                        sw.WriteLine("--------------------------------------------------------------------------");
-                        foreach (var errItem in _errorDetailsReport)
-                        {
-                            sw.WriteLine(errItem);
-                        }
+                        sw.WriteLine(errItem);
                     }
-                    else
-                    {
-                        sw.WriteLine();
-                        sw.WriteLine("Status: High-integrity run. 100% of scanned files processed successfully.");
-                    }
+                }
+                else
+                {
+                    sw.WriteLine();
+                    sw.WriteLine("Status: High-integrity run. 100% of scanned files processed successfully.");
                 }
                 AppendLog($"Historical summary session report saved: BackupHistoryLogs\\{logFileName}", Brushes.LightSeaGreen);
             }
@@ -1518,7 +1507,7 @@ exit";
             }
         }
 
-        private void CompressFileTransparently(string filePath)
+        private static void CompressFileTransparently(string filePath)
         {
             try
             {
@@ -1536,10 +1525,10 @@ exit";
             catch { }
         }
 
-        private string CalculateHash(string filePath)
+        private static string CalculateHash(string filePath)
         {
-            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            using (var sha = SHA256.Create())
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var sha = SHA256.Create();
             {
                 return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
             }
@@ -1573,61 +1562,66 @@ exit";
                     string mountedDrive = MountVhdxAndGetLetter(vhdxPath);
                     string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
 
-                    using (var catalog = new BackupCatalog(dbPath))
+                    using var catalog = new BackupCatalog(dbPath);
+                    var snapshots = catalog.GetCompletedSnapshots();
+                    if (snapshots.Count == 0)
                     {
-                        var snapshots = catalog.GetCompletedSnapshots();
-                        if (snapshots.Count == 0)
+                        AppendLog("No completed snapshots found to verify.", Brushes.Yellow);
+                        return;
+                    }
+
+                    // Verify latest snapshot for brevity, or all if you prefer.
+                    // Let's verify all files in the catalog for maximum protection.
+                    var allVersions = new List<FileVersion>();
+                    foreach(var snap in snapshots)
+                    {
+                        allVersions.AddRange(catalog.GetFileVersionsForSnapshot(snap.Id));
+                    }
+
+                    int total = allVersions.Count(v => !string.IsNullOrEmpty(v.BackupPath) && v.ChangeType != ChangeType.Deleted);
+                    int checkedCount = 0;
+                    int corruptCount = 0;
+
+                    foreach (var v in allVersions)
+                    {
+                        if (string.IsNullOrEmpty(v.BackupPath) || v.ChangeType == ChangeType.Deleted) continue;
+
+                        string physicalPath = Path.Combine(mountedDrive, v.BackupPath);
+                        if (File.Exists(physicalPath))
                         {
-                            AppendLog("No completed snapshots found to verify.", Brushes.Yellow);
-                            return;
-                        }
-
-                        // Verify latest snapshot for brevity, or all if you prefer.
-                        // Let's verify all files in the catalog for maximum protection.
-                        var allVersions = new List<FileVersion>();
-                        foreach(var snap in snapshots)
-                        {
-                            allVersions.AddRange(catalog.GetFileVersionsForSnapshot(snap.Id));
-                        }
-
-                        int total = allVersions.Count(v => !string.IsNullOrEmpty(v.BackupPath) && v.ChangeType != ChangeType.Deleted);
-                        int checkedCount = 0;
-                        int corruptCount = 0;
-
-                        foreach (var v in allVersions)
-                        {
-                            if (string.IsNullOrEmpty(v.BackupPath) || v.ChangeType == ChangeType.Deleted) continue;
-
-                            string physicalPath = Path.Combine(mountedDrive, v.BackupPath);
-                            if (File.Exists(physicalPath))
+                            if (string.IsNullOrEmpty(v.Hash))
+                            {
+                                AppendLog($"Skipped hash check (no recorded hash): {v.BackupPath}", Brushes.Orange);
+                            }
+                            else
                             {
                                 string currentHash = CalculateHash(physicalPath);
                                 if (currentHash != v.Hash)
                                 {
-                                    AppendLog($"!!! BIT ROT DETECTED: {v.BackupPath}", Brushes.Red);
+                                    AppendLog($"!!! BIT ROT DETECTED: {v.BackupPath} (Expected: {v.Hash}, Actual: {currentHash})", Brushes.Red);
                                     corruptCount++;
                                 }
                             }
-                            else
-                            {
-                                AppendLog($"Missing file: {v.BackupPath}", Brushes.Orange);
-                            }
-
-                            checkedCount++;
-                            if (checkedCount % 50 == 0 || checkedCount == total)
-                            {
-                                AppendLog($"Verified {checkedCount}/{total} files...", Brushes.Gray);
-                            }
-                        }
-
-                        if (corruptCount == 0)
-                        {
-                            AppendLog("Integrity Check Complete: All files verified successfully. No bit rot detected.", Brushes.LightGreen);
                         }
                         else
                         {
-                            AppendLog($"Integrity Check Complete: {corruptCount} corruptions found!", Brushes.Red);
+                            AppendLog($"Missing file: {v.BackupPath}", Brushes.Orange);
                         }
+
+                        checkedCount++;
+                        if (checkedCount % 50 == 0 || checkedCount == total)
+                        {
+                            AppendLog($"Verified {checkedCount}/{total} files...", Brushes.Gray);
+                        }
+                    }
+
+                    if (corruptCount == 0)
+                    {
+                        AppendLog("Integrity Check Complete: All files verified successfully. No bit rot detected.", Brushes.LightGreen);
+                    }
+                    else
+                    {
+                        AppendLog($"Integrity Check Complete: {corruptCount} corruptions found!", Brushes.Red);
                     }
                 });
             }
@@ -1656,7 +1650,7 @@ exit";
                 RedirectStandardError = true
             };
 
-            using (var process = Process.Start(startInfo))
+            using var process = Process.Start(startInfo);
             {
                 if (process == null) throw new Exception("Failed to invoke diskpart utility.");
                 string output = process.StandardOutput.ReadToEnd();
@@ -1679,7 +1673,7 @@ exit";
                 RedirectStandardError = true
             };
 
-            using (var process = Process.Start(startInfo))
+            using var process = Process.Start(startInfo);
             {
                 if (process == null) throw new Exception($"Failed to invoke system utility: {fileName}");
                 process.WaitForExit();
@@ -1691,7 +1685,7 @@ exit";
             }
         }
 
-        private string CheckVhdxMountStatus(string vhdxPath)
+        private static string CheckVhdxMountStatus(string vhdxPath)
         {
             try
             {
@@ -1771,7 +1765,7 @@ for ($i = 0; $i -lt 20; $i++) {{
                 RedirectStandardError = true
             };
 
-            using (var process = Process.Start(startInfo))
+            using var process = Process.Start(startInfo);
             {
                 if (process == null) throw new Exception("Failed to initialize system powershell environment.");
                 string output = process.StandardOutput.ReadToEnd();
@@ -1859,7 +1853,7 @@ for ($i = 0; $i -lt 20; $i++) {{
             catch (Exception subDirEx) { _errorDetailsReport.Add($"-> Subfolder Tree Lock: {currentDir} | Reason: Bypassed Subdirectories traversal ({subDirEx.Message})"); }
         }
 
-        private bool IsPathExcluded(string fullPath)
+        private static bool IsPathExcluded(string fullPath)
         {
             string lower = fullPath.ToLower();
             if (GlobalExclusions.IsCustomExcluded(lower)) return true;
@@ -1867,19 +1861,19 @@ for ($i = 0; $i -lt 20; $i++) {{
             return false;
         }
 
-        private string MapToBackupPath(string fullPath)
+        private static string MapToBackupPath(string fullPath)
         {
             if (fullPath.Length >= 3 && fullPath[1] == ':' && fullPath[2] == '\\')
             {
                 char driveLetter = char.ToUpper(fullPath[0]);
-                return Path.Combine(driveLetter.ToString(), fullPath.Substring(3));
+                return Path.Combine(driveLetter.ToString(), fullPath[3..]);
             }
             return fullPath;
         }
 
-        private string FormatBytes(long bytes)
+        private static string FormatBytes(long bytes)
         {
-            string[] suffix = { "B", "KB", "MB", "GB", "TB" };
+            string[] suffix = ["B", "KB", "MB", "GB", "TB"];
             double dblBytes = bytes;
             int i = 0;
             while (dblBytes >= 1024 && i < suffix.Length - 1) { i++; dblBytes /= 1024; }
@@ -1917,8 +1911,8 @@ for ($i = 0; $i -lt 20; $i++) {{
         {
             Dispatcher.Invoke(() =>
             {
-                Run run = new Run($"[{DateTime.Now:HH:mm:ss}] {message}\n") { Foreground = color };
-                Paragraph para = new Paragraph(run) { Margin = new Thickness(0), LineHeight = 16 };
+                Run run = new($"[{DateTime.Now:HH:mm:ss}] {message}\n") { Foreground = color };
+                Paragraph para = new(run) { Margin = new Thickness(0), LineHeight = 16 };
                 RtbLog.Document.Blocks.Add(para);
                 if (RtbLog.Document.Blocks.Count > 1200) RtbLog.Document.Blocks.Remove(RtbLog.Document.Blocks.FirstBlock);
                 LogScrollViewer.ScrollToEnd();
