@@ -1640,6 +1640,9 @@ exit";
                 BtnVerify.IsEnabled = true;
             }
         }
+
+        private static void RunDiskpartScript(string scriptContent)
+        {
             string scriptPath = Path.Combine(Path.GetTempPath(), $"vhdx_op_{Guid.NewGuid()}.txt");
             File.WriteAllText(scriptPath, scriptContent);
 
