@@ -34,6 +34,7 @@ namespace xBackup
         private string _destinationRoot = @"F:\Backup\Home-PC";
         private bool _isProcessing = false;
         private bool _isVhdxMountedManual = false;
+        private bool _isClosingInProgress = false;
         private readonly bool _isSilentMode = false;
         private H.NotifyIcon.TaskbarIcon? _notifyIcon;
         private readonly List<string> _errorDetailsReport = new List<string>();
@@ -335,8 +336,10 @@ namespace xBackup
             });
         }
 
-        private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+        private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
+            if (_isClosingInProgress) return;
+
             // Save coordinates on exit
             SaveWindowPlacementSettings();
 
@@ -351,14 +354,30 @@ namespace xBackup
             {
                 if (_isVhdxMountedManual)
                 {
-                    try
+                    e.Cancel = true;
+                    _isClosingInProgress = true;
+
+                    TxtStatus.Text = "Engine Status: Shutting Down...";
+                    TxtStatus.Foreground = Brushes.Yellow;
+                    PrgWaiting.Visibility = Visibility.Visible;
+
+                    string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
+                    await Task.Run(() =>
                     {
-                        string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
-                        DismountVhdx(vhdxPath);
-                    }
-                    catch { }
+                        try
+                        {
+                            DismountVhdx(vhdxPath);
+                        }
+                        catch { }
+                    });
+
+                    _notifyIcon?.Dispose();
+                    Close();
                 }
-                _notifyIcon?.Dispose();
+                else
+                {
+                    _notifyIcon?.Dispose();
+                }
             }
         }
 
@@ -1045,255 +1064,257 @@ namespace xBackup
 
                 // Initialize Catalog
                 string dbPath = Path.Combine(mountedDrive, "BackupCatalog.db");
-                using var catalog = new BackupCatalog(dbPath);
-                catalog.MarkAbandonedSnapshotsFailed();
-
-                // --- Establish Snapshot Target Architecture ---
-                string nowString = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
-                string snapshotFolderName = $"Snapshot_{nowString}";
-                string activeSnapshotDir = Path.Combine(mountedDrive, snapshotFolderName);
-
-                var snapshot = catalog.CreateSnapshot(DateTime.Now);
-                Directory.CreateDirectory(activeSnapshotDir);
-                AppendLog($"Created unique daily snapshot target folder: {snapshotFolderName}", Brushes.DeepSkyBlue);
-
-                _errorDetailsReport.Clear();
-                long totalScannedCount = 0;
-
-                if (checkpoint != null)
+                using (var catalog = new BackupCatalog(dbPath))
                 {
-                    filesToProcess = checkpoint.FilesToProcess;
-                    AppendLog($"Resuming discovery: {filesToProcess.Count:N0} files loaded from checkpoint.", Brushes.LightGreen);
-                }
-                else
-                {
-                    AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
-                    var sourcePaths = new List<string>(GlobalExclusions.SelectedDrives);
+                    catalog.MarkAbandonedSnapshotsFailed();
 
-                    foreach (var sourceRoot in sourcePaths)
+                    // --- Establish Snapshot Target Architecture ---
+                    string nowString = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+                    string snapshotFolderName = $"Snapshot_{nowString}";
+                    string activeSnapshotDir = Path.Combine(mountedDrive, snapshotFolderName);
+
+                    var snapshot = catalog.CreateSnapshot(DateTime.Now);
+                    Directory.CreateDirectory(activeSnapshotDir);
+                    AppendLog($"Created unique daily snapshot target folder: {snapshotFolderName}", Brushes.DeepSkyBlue);
+
+                    _errorDetailsReport.Clear();
+                    long totalScannedCount = 0;
+
+                    if (checkpoint != null)
                     {
-                        if (!Directory.Exists(sourceRoot))
-                        {
-                            AppendLog($"Source directory absent, skipping scope: {sourceRoot}", Brushes.Yellow);
-                            continue;
-                        }
-                        AppendLog($"Scanning scope: {sourceRoot}...", Brushes.Gray);
-                        DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount, cancellationToken);
-                    }
-                    AppendLog($"Discovery finished. Total files matched: {filesToProcess.Count}.", Brushes.LightGreen);
-                }
-
-                Dispatcher.Invoke(() =>
-                {
-                    LblScanned.Text = filesToProcess.Count.ToString("N0");
-                    PrgBar.Maximum = filesToProcess.Count;
-                });
-
-                int startIndex = checkpoint?.CurrentIndex ?? 0;
-                var seenFilesIds = new HashSet<int>();
-
-                for (int i = startIndex; i < filesToProcess.Count; i++)
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        if (!_isSilentMode)
-                        {
-                            SaveCheckpoint(new BackupCheckpoint
-                            {
-                                Timestamp = DateTime.Now,
-                                FilesToProcess = filesToProcess,
-                                CurrentIndex = i,
-                                DestinationRoot = destRoot,
-                                BackedUpCount = backedUpCount,
-                                UpToDateCount = upToDateCount,
-                                LockedCount = lockedCount,
-                                TotalBytesMirrored = totalBytesMirrored
-                            });
-                        }
-                        cancellationToken.ThrowIfCancellationRequested();
-                    }
-
-                    var file = filesToProcess[i];
-                    int currentIndex = i + 1;
-
-                    Dispatcher.Invoke(() =>
-                    {
-                        _currentFilePath = file;
-                        TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToProcess.Count:N0}] Checking: {Path.GetFileName(file)}";
-                        TxtProgressDetails.Foreground = LinkBrush;
-                        if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
-                        {
-                            PrgBar.Value = currentIndex;
-                            LblBackedUp.Text = backedUpCount.ToString("N0");
-                            LblUpToDate.Text = upToDateCount.ToString("N0");
-                            LblLocked.Text = lockedCount.ToString("N0");
-                            LblSavings.Text = FormatBytes(totalBytesMirrored);
-                        }
-                    });
-
-                    FileInfo sourceFi;
-                    try
-                    {
-                        sourceFi = new FileInfo(file);
-                        if (!sourceFi.Exists) continue;
-                    }
-                    catch
-                    {
-                        lockedCount++;
-                        continue;
-                    }
-
-                    var catalogFile = catalog.GetOrCreateFile(file);
-                    seenFilesIds.Add(catalogFile.Id);
-                    var latestVersion = catalog.GetLatestVersion(catalogFile.Id);
-
-                    bool needsCopy = true;
-                    ChangeType changeType = ChangeType.New;
-
-                    if (latestVersion != null && latestVersion.ChangeType != ChangeType.Deleted)
-                    {
-                        // Diagnostic logging for the first few files to identify why incremental might be failing
-                        if (currentIndex <= 10)
-                        {
-                            AppendLog($"[DEBUG] Incremental Check: {Path.GetFileName(file)}", Brushes.Cyan);
-                            AppendLog($"[DEBUG]   Prior: Snap={latestVersion.SnapshotId}, Size={latestVersion.Size}, Time={latestVersion.LastWriteUtc:O}", Brushes.Gray);
-                            AppendLog($"[DEBUG]   Curr:  Size={sourceFi.Length}, Time={sourceFi.LastWriteTimeUtc:O}", Brushes.Gray);
-                        }
-
-                        // Robust comparison: Ensure both are treated as UTC and compare ticks to avoid precision issues
-                        bool sizeMatch = latestVersion.Size == sourceFi.Length;
-                        bool dateMatch = latestVersion.LastWriteUtc.ToUniversalTime().Ticks == sourceFi.LastWriteTimeUtc.Ticks;
-
-                        if (sizeMatch && dateMatch)
-                        {
-                            needsCopy = false;
-                            if (currentIndex <= 10) AppendLog($"[DEBUG]   Result: UNCHANGED", Brushes.LightGreen);
-                        }
-                        else
-                        {
-                            changeType = ChangeType.Modified;
-                            if (currentIndex <= 10) AppendLog($"[DEBUG]   Result: MODIFIED (SizeMatch={sizeMatch}, DateMatch={dateMatch})", Brushes.Yellow);
-                        }
+                        filesToProcess = checkpoint.FilesToProcess;
+                        AppendLog($"Resuming discovery: {filesToProcess.Count:N0} files loaded from checkpoint.", Brushes.LightGreen);
                     }
                     else
                     {
-                        if (currentIndex <= 10) AppendLog($"[DEBUG] Incremental Check: {Path.GetFileName(file)} -> RESULT: NEW", Brushes.White);
+                        AppendLog("Commencing deep filesystem discovery phase...", Brushes.DeepSkyBlue);
+                        var sourcePaths = new List<string>(GlobalExclusions.SelectedDrives);
+
+                        foreach (var sourceRoot in sourcePaths)
+                        {
+                            if (!Directory.Exists(sourceRoot))
+                            {
+                                AppendLog($"Source directory absent, skipping scope: {sourceRoot}", Brushes.Yellow);
+                                continue;
+                            }
+                            AppendLog($"Scanning scope: {sourceRoot}...", Brushes.Gray);
+                            DiscoverFilesRecursively(sourceRoot, filesToProcess, ref totalScannedCount, cancellationToken);
+                        }
+                        AppendLog($"Discovery finished. Total files matched: {filesToProcess.Count}.", Brushes.LightGreen);
                     }
 
-                    if (!needsCopy)
+                    Dispatcher.Invoke(() =>
                     {
-                        upToDateCount++;
-                        continue;
-                    }
+                        LblScanned.Text = filesToProcess.Count.ToString("N0");
+                        PrgBar.Maximum = filesToProcess.Count;
+                    });
 
-                    string relativeStructurePath = MapToBackupPath(file);
-                    string destFilePath = Path.Combine(activeSnapshotDir, relativeStructurePath);
-                    string tempFilePath = destFilePath + ".tmp";
+                    int startIndex = checkpoint?.CurrentIndex ?? 0;
+                    var seenFilesIds = new HashSet<int>();
 
-                    try
+                    for (int i = startIndex; i < filesToProcess.Count; i++)
                     {
-                        string? parentDir = Path.GetDirectoryName(destFilePath);
-                        if (parentDir != null && !Directory.Exists(parentDir))
+                        if (cancellationToken.IsCancellationRequested)
                         {
-                            Directory.CreateDirectory(parentDir);
+                            if (!_isSilentMode)
+                            {
+                                SaveCheckpoint(new BackupCheckpoint
+                                {
+                                    Timestamp = DateTime.Now,
+                                    FilesToProcess = filesToProcess,
+                                    CurrentIndex = i,
+                                    DestinationRoot = destRoot,
+                                    BackedUpCount = backedUpCount,
+                                    UpToDateCount = upToDateCount,
+                                    LockedCount = lockedCount,
+                                    TotalBytesMirrored = totalBytesMirrored
+                                });
+                            }
+                            cancellationToken.ThrowIfCancellationRequested();
                         }
 
-                        File.Copy(file, tempFilePath, overwrite: true);
-                        var tempFi = new FileInfo(tempFilePath);
-                        if (!tempFi.Exists || tempFi.Length != sourceFi.Length)
-                        {
-                            throw new IOException("Verification failed: Copied file size does not match source file size.");
-                        }
+                        var file = filesToProcess[i];
+                        int currentIndex = i + 1;
 
-                        File.Move(tempFilePath, destFilePath, overwrite: true);
-                        File.SetLastWriteTimeUtc(destFilePath, sourceFi.LastWriteTimeUtc);
-
-                        // Record in catalog
-                        catalog.AddFileVersion(new FileVersion
+                        Dispatcher.Invoke(() =>
                         {
-                            FileId = catalogFile.Id,
-                            SnapshotId = snapshot.Id,
-                            BackupPath = Path.Combine(snapshotFolderName, relativeStructurePath),
-                            Size = sourceFi.Length,
-                            LastWriteUtc = sourceFi.LastWriteTimeUtc,
-                            ChangeType = changeType
+                            _currentFilePath = file;
+                            TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToProcess.Count:N0}] Checking: {Path.GetFileName(file)}";
+                            TxtProgressDetails.Foreground = LinkBrush;
+                            if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
+                            {
+                                PrgBar.Value = currentIndex;
+                                LblBackedUp.Text = backedUpCount.ToString("N0");
+                                LblUpToDate.Text = upToDateCount.ToString("N0");
+                                LblLocked.Text = lockedCount.ToString("N0");
+                                LblSavings.Text = FormatBytes(totalBytesMirrored);
+                            }
                         });
 
-                        totalBytesMirrored += sourceFi.Length;
-                        backedUpCount++;
-                    }
-                    catch (Exception ex)
-                    {
-                        try { if (File.Exists(tempFilePath)) File.Delete(tempFilePath); } catch { }
-                        lockedCount++;
-                        _errorDetailsReport.Add($"-> {file} | Reason: {ex.Message}");
-                    }
-                }
-
-                DeleteCheckpoint();
-
-                // --- Deletion Tracking Phase ---
-                AppendLog("Commencing scope-aware deletion tracking phase...", Brushes.DeepSkyBlue);
-                var allFiles = catalog.GetAllFiles();
-                foreach (var f in allFiles)
-                {
-                    if (!seenFilesIds.Contains(f.Id))
-                    {
-                        // Check if this file IS in current scope (drives) and NOT excluded
-                        bool inScope = GlobalExclusions.SelectedDrives.Any(d => f.SourcePath.StartsWith(d, StringComparison.OrdinalIgnoreCase));
-                        if (inScope && !IsPathExcluded(f.SourcePath))
+                        FileInfo sourceFi;
+                        try
                         {
-                            // It's in scope but we didn't see it -> Deleted
-                            var lastV = catalog.GetLatestVersion(f.Id);
-                            if (lastV != null && lastV.ChangeType != ChangeType.Deleted)
+                            sourceFi = new FileInfo(file);
+                            if (!sourceFi.Exists) continue;
+                        }
+                        catch
+                        {
+                            lockedCount++;
+                            continue;
+                        }
+
+                        var catalogFile = catalog.GetOrCreateFile(file);
+                        seenFilesIds.Add(catalogFile.Id);
+                        var latestVersion = catalog.GetLatestVersion(catalogFile.Id);
+
+                        bool needsCopy = true;
+                        ChangeType changeType = ChangeType.New;
+
+                        if (latestVersion != null && latestVersion.ChangeType != ChangeType.Deleted)
+                        {
+                            // Diagnostic logging for the first few files to identify why incremental might be failing
+                            if (currentIndex <= 10)
                             {
-                                catalog.AddFileVersion(new FileVersion
+                                AppendLog($"[DEBUG] Incremental Check: {Path.GetFileName(file)}", Brushes.Cyan);
+                                AppendLog($"[DEBUG]   Prior: Snap={latestVersion.SnapshotId}, Size={latestVersion.Size}, Time={latestVersion.LastWriteUtc:O}", Brushes.Gray);
+                                AppendLog($"[DEBUG]   Curr:  Size={sourceFi.Length}, Time={sourceFi.LastWriteTimeUtc:O}", Brushes.Gray);
+                            }
+
+                            // Robust comparison: Ensure both are treated as UTC and compare ticks to avoid precision issues
+                            bool sizeMatch = latestVersion.Size == sourceFi.Length;
+                            bool dateMatch = latestVersion.LastWriteUtc.ToUniversalTime().Ticks == sourceFi.LastWriteTimeUtc.Ticks;
+
+                            if (sizeMatch && dateMatch)
+                            {
+                                needsCopy = false;
+                                if (currentIndex <= 10) AppendLog($"[DEBUG]   Result: UNCHANGED", Brushes.LightGreen);
+                            }
+                            else
+                            {
+                                changeType = ChangeType.Modified;
+                                if (currentIndex <= 10) AppendLog($"[DEBUG]   Result: MODIFIED (SizeMatch={sizeMatch}, DateMatch={dateMatch})", Brushes.Yellow);
+                            }
+                        }
+                        else
+                        {
+                            if (currentIndex <= 10) AppendLog($"[DEBUG] Incremental Check: {Path.GetFileName(file)} -> RESULT: NEW", Brushes.White);
+                        }
+
+                        if (!needsCopy)
+                        {
+                            upToDateCount++;
+                            continue;
+                        }
+
+                        string relativeStructurePath = MapToBackupPath(file);
+                        string destFilePath = Path.Combine(activeSnapshotDir, relativeStructurePath);
+                        string tempFilePath = destFilePath + ".tmp";
+
+                        try
+                        {
+                            string? parentDir = Path.GetDirectoryName(destFilePath);
+                            if (parentDir != null && !Directory.Exists(parentDir))
+                            {
+                                Directory.CreateDirectory(parentDir);
+                            }
+
+                            File.Copy(file, tempFilePath, overwrite: true);
+                            var tempFi = new FileInfo(tempFilePath);
+                            if (!tempFi.Exists || tempFi.Length != sourceFi.Length)
+                            {
+                                throw new IOException("Verification failed: Copied file size does not match source file size.");
+                            }
+
+                            File.Move(tempFilePath, destFilePath, overwrite: true);
+                            File.SetLastWriteTimeUtc(destFilePath, sourceFi.LastWriteTimeUtc);
+
+                            // Record in catalog
+                            catalog.AddFileVersion(new FileVersion
+                            {
+                                FileId = catalogFile.Id,
+                                SnapshotId = snapshot.Id,
+                                BackupPath = Path.Combine(snapshotFolderName, relativeStructurePath),
+                                Size = sourceFi.Length,
+                                LastWriteUtc = sourceFi.LastWriteTimeUtc,
+                                ChangeType = changeType
+                            });
+
+                            totalBytesMirrored += sourceFi.Length;
+                            backedUpCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            try { if (File.Exists(tempFilePath)) File.Delete(tempFilePath); } catch { }
+                            lockedCount++;
+                            _errorDetailsReport.Add($"-> {file} | Reason: {ex.Message}");
+                        }
+                    }
+
+                    DeleteCheckpoint();
+
+                    // --- Deletion Tracking Phase ---
+                    AppendLog("Commencing scope-aware deletion tracking phase...", Brushes.DeepSkyBlue);
+                    var allFiles = catalog.GetAllFiles();
+                    foreach (var f in allFiles)
+                    {
+                        if (!seenFilesIds.Contains(f.Id))
+                        {
+                            // Check if this file IS in current scope (drives) and NOT excluded
+                            bool inScope = GlobalExclusions.SelectedDrives.Any(d => f.SourcePath.StartsWith(d, StringComparison.OrdinalIgnoreCase));
+                            if (inScope && !IsPathExcluded(f.SourcePath))
+                            {
+                                // It's in scope but we didn't see it -> Deleted
+                                var lastV = catalog.GetLatestVersion(f.Id);
+                                if (lastV != null && lastV.ChangeType != ChangeType.Deleted)
                                 {
-                                    FileId = f.Id,
-                                    SnapshotId = snapshot.Id,
-                                    ChangeType = ChangeType.Deleted
-                                });
-                                purgedFilesCount++;
+                                    catalog.AddFileVersion(new FileVersion
+                                    {
+                                        FileId = f.Id,
+                                        SnapshotId = snapshot.Id,
+                                        ChangeType = ChangeType.Deleted
+                                    });
+                                    purgedFilesCount++;
+                                }
                             }
                         }
                     }
-                }
 
-                catalog.UpdateSnapshotStatus(snapshot.Id, SnapshotStatus.Complete);
-                AppendLog($"Backup cycle finished. Copied {backedUpCount:N0} files. {upToDateCount:N0} were up-to-date. {purgedFilesCount:N0} deletions recorded.", Brushes.LightGreen);
+                    catalog.UpdateSnapshotStatus(snapshot.Id, SnapshotStatus.Complete);
+                    AppendLog($"Backup cycle finished. Copied {backedUpCount:N0} files. {upToDateCount:N0} were up-to-date. {purgedFilesCount:N0} deletions recorded.", Brushes.LightGreen);
 
-                // --- History Retention Window Pruning Step ---
-                try
-                {
-                    AppendLog($"Evaluating history retention policy rules ({GlobalExclusions.RetentionDays} days maximum limit)...", Brushes.DeepSkyBlue);
-                    var snapshots = catalog.GetCompletedSnapshots();
-                    int prunedFoldersCount = 0;
-                    foreach (var snap in snapshots)
+                    // --- History Retention Window Pruning Step ---
+                    try
                     {
-                        if ((DateTime.Today - snap.SnapshotDate).TotalDays > GlobalExclusions.RetentionDays)
+                        AppendLog($"Evaluating history retention policy rules ({GlobalExclusions.RetentionDays} days maximum limit)...", Brushes.DeepSkyBlue);
+                        var snapshots = catalog.GetCompletedSnapshots();
+                        int prunedFoldersCount = 0;
+                        foreach (var snap in snapshots)
                         {
-                            AppendLog($"Pruning expired historical data snapshot: {snap.SnapshotDate:yyyy-MM-dd}", Brushes.Orange);
-
-                            string datePattern = $"Snapshot_{snap.SnapshotDate:yyyy-MM-dd}*";
-                            var dirs = Directory.GetDirectories(mountedDrive, datePattern);
-                            foreach (var dir in dirs)
+                            if ((DateTime.Today - snap.SnapshotDate).TotalDays > GlobalExclusions.RetentionDays)
                             {
-                                try { Directory.Delete(dir, true); } catch { }
-                            }
+                                AppendLog($"Pruning expired historical data snapshot: {snap.SnapshotDate:yyyy-MM-dd}", Brushes.Orange);
 
-                            catalog.DeleteSnapshot(snap.Id);
-                            prunedFoldersCount++;
+                                string datePattern = $"Snapshot_{snap.SnapshotDate:yyyy-MM-dd}*";
+                                var dirs = Directory.GetDirectories(mountedDrive, datePattern);
+                                foreach (var dir in dirs)
+                                {
+                                    try { Directory.Delete(dir, true); } catch { }
+                                }
+
+                                catalog.DeleteSnapshot(snap.Id);
+                                prunedFoldersCount++;
+                            }
+                        }
+                        if (prunedFoldersCount > 0)
+                        {
+                            AppendLog($"Retention cycle complete. Discarded {prunedFoldersCount} expired snapshots.", Brushes.LightGreen);
                         }
                     }
-                    if (prunedFoldersCount > 0)
+                    catch (Exception rentEx)
                     {
-                        AppendLog($"Retention cycle complete. Discarded {prunedFoldersCount} expired snapshots.", Brushes.LightGreen);
+                        AppendLog($"Warning: History retention encountered issues ({rentEx.Message})", Brushes.Orange);
                     }
-                }
-                catch (Exception rentEx)
-                {
-                    AppendLog($"Warning: History retention encountered issues ({rentEx.Message})", Brushes.Orange);
-                }
+                } // Catalog is disposed here explicitly
             }
             catch (OperationCanceledException)
             {

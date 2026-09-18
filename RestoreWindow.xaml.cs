@@ -43,7 +43,11 @@ namespace xBackup
             if (CboSnapshots.SelectedValue is int snapId)
             {
                 SelectedSnapshotId = snapId;
-                await LoadFileTree(snapId);
+                // Run loading on a background task to keep UI responsive and prevent dispatcher crashes
+                await Task.Run(async () =>
+                {
+                    await LoadFileTree(snapId);
+                });
             }
         }
 
@@ -51,30 +55,39 @@ namespace xBackup
         {
             try
             {
-                PrgLoading.Visibility = Visibility.Visible;
-                TxtNoData.Visibility = Visibility.Collapsed;
-                RestoreTreeView.ItemsSource = null;
-
-                var files = await Task.Run(() => _catalog.GetFilesAtSnapshot(snapshotId));
-
-                var roots = await Task.Run(() => BuildTree(files));
-                RestoreTreeView.ItemsSource = roots;
-
-                if (roots.Count == 0)
+                Dispatcher.Invoke(() =>
                 {
-                    TxtNoData.Text = "No files found in this snapshot.";
-                    TxtNoData.Visibility = Visibility.Visible;
-                }
+                    PrgLoading.Visibility = Visibility.Visible;
+                    TxtNoData.Visibility = Visibility.Collapsed;
+                    RestoreTreeView.ItemsSource = null;
+                });
+
+                var files = _catalog.GetFilesAtSnapshot(snapshotId);
+
+                var roots = BuildTree(files);
+
+                Dispatcher.Invoke(() =>
+                {
+                    RestoreTreeView.ItemsSource = roots;
+                    if (roots.Count == 0)
+                    {
+                        TxtNoData.Text = "No files found in this snapshot.";
+                        TxtNoData.Visibility = Visibility.Visible;
+                    }
+                });
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to load file tree: {ex.Message}\n\nPlease try selecting the snapshot again or wait a few seconds for the drive to stabilize.", "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                TxtNoData.Text = "Error loading files. Please retry.";
-                TxtNoData.Visibility = Visibility.Visible;
+                Dispatcher.Invoke(() =>
+                {
+                    MessageBox.Show($"Failed to load file tree: {ex.Message}\n\nPlease try selecting the snapshot again.", "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    TxtNoData.Text = "Error loading files. Please retry.";
+                    TxtNoData.Visibility = Visibility.Visible;
+                });
             }
             finally
             {
-                PrgLoading.Visibility = Visibility.Collapsed;
+                Dispatcher.Invoke(() => PrgLoading.Visibility = Visibility.Collapsed);
             }
         }
 

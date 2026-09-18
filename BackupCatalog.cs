@@ -17,7 +17,8 @@ namespace xBackup
                 DataSource = dbPath,
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 ForeignKeys = true,
-                DefaultTimeout = 60 // High timeout for VHDX latency
+                DefaultTimeout = 60,
+                Pooling = false // Disable pooling to ensure file locks are released immediately on Dispose
             }.ToString();
 
             _connection = new SqliteConnection(connectionString);
@@ -37,7 +38,7 @@ namespace xBackup
                     using (var cmd = _connection.CreateCommand())
                     {
                         // Performance and reliability tweaks for ReFS Dev Drives
-                        cmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 10000;";
+                        cmd.CommandText = "PRAGMA journal_mode = DELETE; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 10000;";
                         cmd.ExecuteNonQuery();
                     }
 
@@ -479,7 +480,16 @@ namespace xBackup
 
         public void Dispose()
         {
+            try
+            {
+                if (_connection.State == System.Data.ConnectionState.Open)
+                {
+                    _connection.Close();
+                }
+            }
+            catch { }
             _connection.Dispose();
+            SqliteConnection.ClearAllPools(); // Force release of all file handles
         }
     }
 }
