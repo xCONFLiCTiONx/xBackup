@@ -40,6 +40,8 @@ namespace xBackup
         private bool _isVerifying = false;
         private bool _isVhdxMountedManual = false;
         private bool _isClosingInProgress = false;
+        private bool _isCleanupDone = false;
+        private bool _isForceExit = false;
         private readonly bool _isSilentMode = false;
         private H.NotifyIcon.TaskbarIcon? _notifyIcon;
         private readonly List<string> _errorDetailsReport = [];
@@ -339,58 +341,80 @@ namespace xBackup
 
         private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
-            if (_isClosingInProgress) return;
-
-            // Save coordinates on exit
-            SaveWindowPlacementSettings();
-
-            // If the user clicks close button while background engine processing, minimize to system tray instead of aborting
-            if (_isProcessing || _isVerifying)
+            if (_isCleanupDone) return;
+            if (_isClosingInProgress)
             {
                 e.Cancel = true;
+                return;
+            }
+
+            // If the user clicks close button while background engine processing, minimize to system tray instead of aborting
+            // Unless this is a forced exit from the tray menu
+            if (!_isForceExit && (_isProcessing || _isVerifying))
+            {
+                e.Cancel = true;
+                SaveWindowPlacementSettings();
                 Hide();
                 string opName = _isProcessing ? "Backup or Restore" : "Integrity Verification";
                 _notifyIcon?.ShowNotification("Engine Active", $"The {opName} execution is still running in the background system tray.");
+                return;
             }
-            else
+
+            // Start the visual shutdown process
+            e.Cancel = true;
+            _isClosingInProgress = true;
+
+            // 1. Immediate UI Feedback
+            TxtStatus.Text = "Engine Status: Shutting Down...";
+            TxtStatus.Foreground = Brushes.Yellow;
+            PrgWaiting.Visibility = Visibility.Visible;
+            PrgBar.IsIndeterminate = true;
+            TxtProgressDetails.Text = "Performing engine cleanup and container dismount...";
+            TxtProgressDetails.Foreground = LinkBrush;
+
+            // Ensure window is visible and not minimized if coming from tray
+            if (Visibility != Visibility.Visible)
             {
-                // Start by checking if we need to do anything. If so, show the UI.
-                string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
-
-                // Quick check for existing mounts
-                bool needsDismount = _isVhdxMountedManual || CheckVhdxMountStatus(vhdxPath) != "NotMounted";
-
-                if (needsDismount)
-                {
-                    e.Cancel = true;
-                    _isClosingInProgress = true;
-
-                    TxtStatus.Text = "Engine Status: Shutting Down...";
-                    TxtStatus.Foreground = Brushes.Yellow;
-                    PrgWaiting.Visibility = Visibility.Visible;
-
-                    PrgBar.IsIndeterminate = true;
-                    TxtProgressDetails.Text = "Performing engine cleanup and container dismount...";
-                    TxtProgressDetails.Foreground = LinkBrush;
-
-                    await Task.Run(() =>
-                    {
-                        try
-                        {
-                            SqliteConnection.ClearAllPools();
-                            DismountVhdx(vhdxPath);
-                        }
-                        catch { }
-                    });
-
-                    _notifyIcon?.Dispose();
-                    Close();
-                }
-                else
-                {
-                    _notifyIcon?.Dispose();
-                }
+                Show();
             }
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+            }
+            Activate();
+
+            // Short delay to ensure the UI renders the status change before blocking the thread with disk I/O or background tasks
+            await Task.Delay(50);
+
+            // 2. Save coordinates
+            SaveWindowPlacementSettings();
+
+            // 3. Perform cleanup
+            string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
+            bool needsDismount = _isVhdxMountedManual || CheckVhdxMountStatus(vhdxPath) != "NotMounted";
+
+            await Task.Run(() =>
+            {
+                try
+                {
+                    SqliteConnection.ClearAllPools();
+                    if (needsDismount)
+                    {
+                        DismountVhdx(vhdxPath);
+                    }
+                    else
+                    {
+                        // Artificial delay to show the progress bar even if no work is needed
+                        System.Threading.Thread.Sleep(800);
+                    }
+                }
+                catch { }
+            });
+
+            // 4. Final Exit
+            _notifyIcon?.Dispose();
+            _isCleanupDone = true;
+            Close();
         }
 
         private void RestoreFromTray()
@@ -422,7 +446,7 @@ namespace xBackup
 
         private void MenuExit_Click(object sender, RoutedEventArgs e)
         {
-            if (_isProcessing)
+            if (_isProcessing || _isVerifying)
             {
                 var res = MessageBox.Show(
                     "Backup engine is actively processing entries. Are you sure you want to force terminate the application operation?",
@@ -433,21 +457,8 @@ namespace xBackup
                 if (res != MessageBoxResult.Yes) return;
             }
 
-            if (_isVhdxMountedManual)
-            {
-                try
-                {
-                    string vhdxPath = Path.Combine(_destinationRoot, "BackupDev.vhdx");
-                    DismountVhdx(vhdxPath);
-                }
-                catch { }
-            }
-
-            _isProcessing = false;
-            SaveWindowPlacementSettings();
-            _notifyIcon?.Dispose();
-
-            Environment.Exit(0);
+            _isForceExit = true;
+            Close();
         }
 
         private void UpdateTaskSchedulerStatus()
@@ -514,8 +525,7 @@ namespace xBackup
 
             if (Visibility != Visibility.Visible)
             {
-                _notifyIcon?.Dispose();
-                Application.Current.Shutdown();
+                Close();
             }
         }
 
