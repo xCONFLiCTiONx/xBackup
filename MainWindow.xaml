@@ -292,8 +292,8 @@
                 <Button x:Name="BtnScheduleTask" Content="Register Midnight Wake Task" Width="230" Background="#3E3E42" Click="BtnScheduleTask_Click"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button x:Name="BtnVerify" Content="Verify Integrity..." Width="150" Margin="0,0,10,0" Background="#3E3E42" Click="BtnVerify_Click"/>
-                <Button x:Name="BtnRestore" Content="Restore Files..." Width="150" Margin="0,0,10,0" Background="#3E3E42" Click="BtnRestore_Click"/>
+                <Button x:Name="BtnVerify" Content="Verify Integrity" Width="150" Margin="0,0,10,0" Background="#3E3E42" Click="BtnVerify_Click"/>
+                <Button x:Name="BtnRestore" Content="Restore Files" Width="150" Margin="0,0,10,0" Background="#3E3E42" Click="BtnRestore_Click"/>
                 <Button x:Name="BtnToggleMount" Content="Mount Backup Drive" Width="180" Margin="0,0,10,0" Background="#3E3E42" Click="BtnToggleMount_Click"/>
                 <Button x:Name="BtnStop" Content="Stop" Width="80" Margin="0,0,10,0" Background="#B43232" Click="BtnStop_Click" IsEnabled="False"/>
                 <Button x:Name="BtnBackup" Content="Execute Incremental Backup" Width="220" Background="#007ACC" Click="BtnBackup_Click"/>

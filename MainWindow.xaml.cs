@@ -1660,7 +1660,7 @@ exit";
             {
                 _isVerifying = false;
                 BtnVerify.IsEnabled = true;
-                BtnVerify.Content = "Verify Integrity...";
+                BtnVerify.Content = "Verify Integrity";
                 BtnVerify.Background = (Brush)new BrushConverter().ConvertFromString("#3E3E42")!;
 
                 // Restore other action buttons
