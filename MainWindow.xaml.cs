@@ -33,6 +33,15 @@ namespace xBackup
         private const uint ES_AWAYMODE_REQUIRED = 0x00000040;
 
         private string? _currentFilePath;
+        private string? CurrentFilePath
+        {
+            get => _currentFilePath;
+            set
+            {
+                _currentFilePath = value;
+                TxtProgressDetails.ToolTip = value;
+            }
+        }
         private static readonly Brush LinkBrush = (Brush)new BrushConverter().ConvertFromString("#3794C0")!;
         private static readonly Brush DefaultBrush = (Brush)new BrushConverter().ConvertFromString("#D4D4D4")!;
         private string _destinationRoot = @"F:\Backup\Home-PC";
@@ -797,7 +806,7 @@ namespace xBackup
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        _currentFilePath = file;
+                        CurrentFilePath = file;
                         TxtProgressDetails.Text = $"[{current:N0}/{total:N0}] Restoring: {Path.GetFileName(file)}";
                         TxtProgressDetails.Foreground = LinkBrush;
                         if (current % 100 == 0 || current == total)
@@ -838,7 +847,7 @@ namespace xBackup
                 Dispatcher.Invoke(() =>
                 {
                     TxtProgressDetails.Text = "Restore Operation Finished";
-                    _currentFilePath = null;
+                    CurrentFilePath = null;
                     TxtProgressDetails.Foreground = DefaultBrush;
                 });
             }
@@ -868,7 +877,7 @@ namespace xBackup
                     LblScanned.Text = filesToRestore.Count.ToString("N0");
                     PrgBar.Maximum = filesToRestore.Count;
                     TxtProgressDetails.Text = $"Found {filesToRestore.Count:N0} files to restore.";
-                    _currentFilePath = null;
+                    CurrentFilePath = null;
                     TxtProgressDetails.Foreground = DefaultBrush;
                 });
 
@@ -884,7 +893,7 @@ namespace xBackup
 
                     Dispatcher.Invoke(() =>
                     {
-                        _currentFilePath = file;
+                        CurrentFilePath = file;
                         TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToRestore.Count:N0}] Restoring: {Path.GetFileName(file)}";
                         TxtProgressDetails.Foreground = LinkBrush;
                         if (currentIndex % 100 == 0 || currentIndex == filesToRestore.Count)
@@ -1004,7 +1013,7 @@ namespace xBackup
             Dispatcher.Invoke(() =>
             {
                 TxtProgressDetails.Text = "Restore Operation Finished";
-                _currentFilePath = null;
+                CurrentFilePath = null;
                 TxtProgressDetails.Foreground = DefaultBrush;
                 LblBackedUp.Text = restoredCount.ToString("N0");
                 LblUpToDate.Text = skippedCount.ToString("N0");
@@ -1223,7 +1232,7 @@ namespace xBackup
 
                         Dispatcher.Invoke(() =>
                         {
-                            _currentFilePath = file;
+                            CurrentFilePath = file;
                             TxtProgressDetails.Text = $"[{currentIndex:N0}/{filesToProcess.Count:N0}] Checking: {Path.GetFileName(file)}";
                             TxtProgressDetails.Foreground = LinkBrush;
                             if (currentIndex % 100 == 0 || currentIndex == filesToProcess.Count)
@@ -1474,7 +1483,7 @@ namespace xBackup
             Dispatcher.Invoke(() =>
             {
                 TxtProgressDetails.Text = "Backup Operation Finished";
-                _currentFilePath = null;
+                CurrentFilePath = null;
                 TxtProgressDetails.Foreground = DefaultBrush;
                 LblBackedUp.Text = backedUpCount.ToString("N0");
                 LblUpToDate.Text = upToDateCount.ToString("N0");
@@ -1680,7 +1689,7 @@ exit";
 
                 PrgBar.IsIndeterminate = false;
                 PrgBar.Value = 0;
-                _currentFilePath = null;
+                CurrentFilePath = null;
                 TxtProgressDetails.Foreground = DefaultBrush;
                 TxtProgressDetails.Text = "Verification Operation Finished";
 
@@ -1760,7 +1769,7 @@ exit";
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        _currentFilePath = physicalPath;
+                        CurrentFilePath = physicalPath;
                         TxtProgressDetails.Text = $"Verifying Integrity: [{checkedCount + 1:N0}/{total:N0}] {Path.GetFileName(v.BackupPath)}";
                     });
                 }
@@ -1808,6 +1817,7 @@ exit";
             Dispatcher.Invoke(() =>
             {
                 TxtProgressDetails.Text = "Integrity Check Finished";
+                CurrentFilePath = null;
                 TxtProgressDetails.Foreground = DefaultBrush;
             });
 
