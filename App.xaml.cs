@@ -26,11 +26,13 @@ namespace xBackup
             AppDomain.CurrentDomain.UnhandledException += (s, args) =>
             {
                 var ex = args.ExceptionObject as Exception;
+                LogCrash("AppDomain", ex);
                 MessageBox.Show($"FATAL APP DOMAIN CRASH: {ex?.Message}\n\nStack Trace:\n{ex?.StackTrace}", "Fatal Exception Caught", MessageBoxButton.OK, MessageBoxImage.Error);
             };
 
             Current.DispatcherUnhandledException += (s, args) =>
             {
+                LogCrash("Dispatcher", args.Exception);
                 MessageBox.Show($"FATAL UI DISPATCHER CRASH: {args.Exception.Message}\n\nStack Trace:\n{args.Exception.StackTrace}", "Fatal Exception Caught", MessageBoxButton.OK, MessageBoxImage.Error);
                 args.Handled = true;
             };
@@ -69,6 +71,20 @@ namespace xBackup
                 // Kick off the automated background engine
                 mainWindow.ExecuteSilentScheduledBackup();
             }
+        }
+
+        private static void LogCrash(string source, Exception? ex)
+        {
+            try
+            {
+                string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string folder = Path.Combine(appData, "SmartBackupEngine");
+                Directory.CreateDirectory(folder);
+                string logFile = Path.Combine(folder, "crash_log.txt");
+                string logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{source}] {ex?.Message}\nStack Trace:\n{ex?.StackTrace}\n----------------------------------------\n";
+                File.AppendAllText(logFile, logEntry);
+            }
+            catch { }
         }
 
         protected override void OnExit(ExitEventArgs e)

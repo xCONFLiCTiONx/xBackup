@@ -363,9 +363,12 @@ namespace xBackup
             {
                 e.Cancel = true;
                 SaveWindowPlacementSettings();
-                Hide();
-                string opName = _isProcessing ? "Backup or Restore" : "Integrity Verification";
-                _notifyIcon?.ShowNotification("Engine Active", $"The {opName} execution is still running in the background system tray.");
+                _ = Dispatcher.InvokeAsync(() =>
+                {
+                    Hide();
+                    string opName = _isProcessing ? "Backup or Restore" : "Integrity Verification";
+                    _notifyIcon?.ShowNotification("Engine Active", $"The {opName} execution is still running in the background system tray.");
+                });
                 return;
             }
 
@@ -381,6 +384,10 @@ namespace xBackup
             TxtProgressDetails.Text = "Performing engine cleanup and container dismount...";
             TxtProgressDetails.Foreground = LinkBrush;
 
+            // Allow WPF Closing handler to complete and reset the window's internal _isClosing state
+            // before we manipulate window visibility or window state.
+            await Task.Delay(50);
+
             // Ensure window is visible and not minimized if coming from tray
             if (Visibility != Visibility.Visible)
             {
@@ -391,9 +398,6 @@ namespace xBackup
                 WindowState = WindowState.Normal;
             }
             Activate();
-
-            // Short delay to ensure the UI renders the status change before blocking the thread with disk I/O or background tasks
-            await Task.Delay(50);
 
             // 2. Save coordinates
             SaveWindowPlacementSettings();
@@ -428,6 +432,8 @@ namespace xBackup
 
         private void RestoreFromTray()
         {
+            if (_isClosingInProgress || _isCleanupDone) return;
+
             Show();
 
             try
