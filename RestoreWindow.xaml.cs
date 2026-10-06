@@ -10,6 +10,12 @@ using xBackup.Models;
 
 namespace xBackup
 {
+    public class SnapshotDisplay
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
     public partial class RestoreWindow : Window
     {
         private readonly BackupCatalog _catalog;
@@ -30,9 +36,25 @@ namespace xBackup
 
         private void LoadSnapshots()
         {
+            var items = new List<SnapshotDisplay>
+            {
+                new SnapshotDisplay { Id = -1, Name = "Latest Versions (All Files)" }
+            };
+
             var snapshots = _catalog.GetSnapshots();
-            CboSnapshots.ItemsSource = snapshots;
-            if (snapshots.Count > 0)
+            foreach (var s in snapshots)
+            {
+                items.Add(new SnapshotDisplay
+                {
+                    Id = s.Id,
+                    Name = $"Snapshot - {s.SnapshotDate:yyyy-MM-dd HH:mm:ss}"
+                });
+            }
+
+            CboSnapshots.ItemsSource = items;
+            CboSnapshots.DisplayMemberPath = "Name";
+            CboSnapshots.SelectedValuePath = "Id";
+            if (items.Count > 0)
             {
                 CboSnapshots.SelectedIndex = 0;
             }
@@ -62,7 +84,15 @@ namespace xBackup
                     RestoreTreeView.ItemsSource = null;
                 });
 
-                var files = _catalog.GetFilesAtSnapshot(snapshotId);
+                List<(BackupFile file, FileVersion version)> files;
+                if (snapshotId == -1)
+                {
+                    files = _catalog.GetLatestFiles();
+                }
+                else
+                {
+                    files = _catalog.GetFilesAtSnapshot(snapshotId);
+                }
 
                 var roots = BuildTree(files);
 
@@ -71,7 +101,7 @@ namespace xBackup
                     RestoreTreeView.ItemsSource = roots;
                     if (roots.Count == 0)
                     {
-                        TxtNoData.Text = "No files found in this snapshot.";
+                        TxtNoData.Text = "No files found.";
                         TxtNoData.Visibility = Visibility.Visible;
                     }
                 });
