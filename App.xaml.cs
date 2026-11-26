@@ -73,6 +73,7 @@ namespace xBackup
             base.OnStartup(e);
 
             bool silentMode = e.Args.Contains("--silent", StringComparer.OrdinalIgnoreCase);
+            AppLogger.Info("APP", $"xBackup starting (silentMode={silentMode}, args='{string.Join(" ", e.Args)}').");
 
             var mainWindow = new MainWindow(silentMode);
             Current.MainWindow = mainWindow;
@@ -83,25 +84,17 @@ namespace xBackup
             }
             else
             {
-                // To keep the app running in the system tray during silent scheduled execution,
-                // we instantiate the window, but we DO NOT call .Show(). WPF windows initialized
-                // in code behind require a brief invocation loop tick to correctly construct and bind
-                // their Resource trees (including the tray NotifyIcon resource block).
                 mainWindow.Visibility = Visibility.Hidden;
-
-                // Trigger the window's loaded sequence explicitly to bind resources and populate the system tray icon
                 mainWindow.Width = 0;
                 mainWindow.Height = 0;
                 mainWindow.ShowInTaskbar = false;
                 mainWindow.Show();
                 mainWindow.Hide();
 
-                // Restore values back to normal state configurations so that it populates cleanly if double clicked later
-                mainWindow.Width = 880;
-                mainWindow.Height = 620;
+                mainWindow.Width = 1040;
+                mainWindow.Height = 680;
                 mainWindow.ShowInTaskbar = true;
 
-                // Kick off the automated background engine
                 mainWindow.ExecuteSilentScheduledBackup();
             }
         }

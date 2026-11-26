@@ -6,15 +6,13 @@ namespace xBackup
 {
     public static class TaskSchedulerHelper
     {
-        private const string TaskName = "SmartPersonalBackupEngine";
+        public const string TaskName = "SmartPersonalBackupEngine";
 
         public static bool IsRunningAsAdmin()
         {
-            using (var identity = WindowsIdentity.GetCurrent())
-            {
-                var principal = new WindowsPrincipal(identity);
-                return principal.IsInRole(WindowsBuiltInRole.Administrator);
-            }
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
         }
 
         public static bool DoesTaskExist()
@@ -30,11 +28,9 @@ namespace xBackup
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
-                using (var process = Process.Start(startInfo))
-                {
-                    process?.WaitForExit();
-                    return process?.ExitCode == 0;
-                }
+                using var process = Process.Start(startInfo);
+                process?.WaitForExit(10000);
+                return process?.ExitCode == 0;
             }
             catch
             {
@@ -42,22 +38,39 @@ namespace xBackup
             }
         }
 
+        public static string GetTaskStatusSummary()
+        {
+            try
+            {
+                string script = $@"
+$t = Get-ScheduledTask -TaskName '{TaskName}' -ErrorAction SilentlyContinue;
+if (-not $t) {{ Write-Output 'Not registered'; return; }}
+$info = Get-ScheduledTaskInfo -TaskName '{TaskName}' -ErrorAction SilentlyContinue;
+$limit = $t.Settings.ExecutionTimeLimit;
+$next = if ($info -and $info.NextRunTime) {{ $info.NextRunTime.ToString('g') }} else {{ 'N/A' }};
+$last = if ($info -and $info.LastRunTime -and $info.LastRunTime.Year -gt 2000) {{ $info.LastRunTime.ToString('g') }} else {{ 'Never' }};
+$code = if ($info) {{ $info.LastTaskResult }} else {{ 0 }};
+Write-Output ""Active | Next: $next | Last: $last (code $code) | Limit: $limit"";";
+                return VhdxManager.RunPowerShell(script, 15000).Trim();
+            }
+            catch
+            {
+                return DoesTaskExist() ? "Registered (Daily at 12:00 AM)" : "Not registered";
+            }
+        }
+
         public static bool CreateDailyBackupTask()
         {
             try
             {
-                string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
+                string exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
                 if (string.IsNullOrEmpty(exePath) || !exePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                 {
-                    // If running via dotnet run, MainModule might point to dotnet.exe instead of our built app
-                    // schtasks needs a permanent absolute executable path
                     return false;
                 }
 
-                // Delete if exists first to renew configuration cleanly
                 DeleteBackupTask();
 
-                // Build XML specification to natively support the "WakeToRun" condition feature which is impossible via basic schtasks CLI switches alone.
                 string tempXmlPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BackupTaskConfig.xml");
                 string author = WindowsIdentity.GetCurrent().Name;
 
@@ -66,7 +79,7 @@ namespace xBackup
   <RegistrationInfo>
     <Date>{DateTime.Now:yyyy-MM-ddTHH:mm:ss}</Date>
     <Author>{author}</Author>
-    <Description>Smart automated midnight incremental backup for personal files on C drive.</Description>
+    <Description>xBackup automated daily midnight incremental backup for Home-PC and xServer.</Description>
   </RegistrationInfo>
   <Triggers>
     <CalendarTrigger>
@@ -122,15 +135,18 @@ namespace xBackup
                     RedirectStandardError = true
                 };
 
-                using (var process = Process.Start(startInfo))
-                {
-                    process?.WaitForExit();
-                    try { System.IO.File.Delete(tempXmlPath); } catch { }
-                    return process?.ExitCode == 0;
-                }
+                using var process = Process.Start(startInfo);
+                process?.WaitForExit(15000);
+                try { System.IO.File.Delete(tempXmlPath); } catch { }
+                bool ok = process?.ExitCode == 0;
+                AppLogger.Info("SCHEDULER", ok
+                    ? $"Registered daily midnight task '{TaskName}' (WakeToRun=true, Limit=PT6H, Exe={exePath})."
+                    : $"Failed to register task '{TaskName}' (exit {process?.ExitCode}).");
+                return ok;
             }
-            catch
+            catch (Exception ex)
             {
+                AppLogger.Error("SCHEDULER", $"CreateDailyBackupTask error: {ex.Message}");
                 return false;
             }
         }
@@ -146,10 +162,8 @@ namespace xBackup
                     CreateNoWindow = true,
                     UseShellExecute = false
                 };
-                using (var process = Process.Start(startInfo))
-                {
-                    process?.WaitForExit();
-                }
+                using var process = Process.Start(startInfo);
+                process?.WaitForExit(10000);
             }
             catch { }
         }

@@ -34,6 +34,12 @@ namespace xBackup
             LoadSnapshots();
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            DwmThemeHelper.ApplyDarkWindowChrome(this);
+        }
+
         private void LoadSnapshots()
         {
             var items = new List<SnapshotDisplay>

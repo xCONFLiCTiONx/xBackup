@@ -2,34 +2,36 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:tb="clr-namespace:H.NotifyIcon;assembly=H.NotifyIcon.Wpf"
-        Title="Smart Personal Backup Engine" Height="620" Width="880"
+        Title="xBackup" Width="1040" Height="680"
+        MinWidth="880" MinHeight="580"
         Icon="icon.ico"
-        Background="#1E1E1E">
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource AppBackground}"
+        Foreground="{StaticResource AppText}">
 
     <Window.Resources>
         <tb:TaskbarIcon x:Key="NotifyIcon"
                         IconSource="pack://application:,,,/xBackup;component/icon.ico"
-                        ToolTipText="Personal Backup Engine Active"
+                        ToolTipText="xBackup — ReFS Backup Engine"
                         DoubleClickCommand="{Binding ShowWindowCommand}"
                         MenuActivation="RightClick">
             <tb:TaskbarIcon.ContextMenu>
-                <ContextMenu Background="#252526" Foreground="#D4D4D4" BorderBrush="#3E3E42" BorderThickness="1">
+                <ContextMenu Background="#1A1A1E" Foreground="#F4F4F5" BorderBrush="#2C2C33" BorderThickness="1">
                     <ContextMenu.Resources>
-                        <!-- Fully dark theme out the MenuItem layout styles including the icon margin column grid gutter -->
                         <Style TargetType="MenuItem">
-                            <Setter Property="Background" Value="#252526"/>
-                            <Setter Property="Foreground" Value="#D4D4D4"/>
-                            <Setter Property="Padding" Value="10,6"/>
+                            <Setter Property="Background" Value="#1A1A1E"/>
+                            <Setter Property="Foreground" Value="#F4F4F5"/>
+                            <Setter Property="Padding" Value="12,7"/>
                             <Setter Property="Template">
                                 <Setter.Value>
                                     <ControlTemplate TargetType="MenuItem">
-                                        <Border x:Name="Border" Background="{TemplateBinding Background}" BorderThickness="0" Padding="{TemplateBinding Padding}">
+                                        <Border x:Name="Border" Background="{TemplateBinding Background}" CornerRadius="6" Margin="2" Padding="{TemplateBinding Padding}">
                                             <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="Border" Property="Background" Value="#3E3E42"/>
-                                                <Setter Property="Foreground" Value="White"/>
+                                                <Setter TargetName="Border" Property="Background" Value="#2B1B0E"/>
+                                                <Setter Property="Foreground" Value="#FAAD3F"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -37,347 +39,561 @@
                             </Setter>
                         </Style>
                     </ContextMenu.Resources>
-                    <MenuItem Header="Show Backup Monitor" Click="MenuShow_Click" />
-                    <MenuItem Header="Exit Application" Click="MenuExit_Click" />
+                    <MenuItem Header="Show xBackup" Click="MenuShow_Click"/>
+                    <MenuItem Header="Exit Application" Click="MenuExit_Click"/>
                 </ContextMenu>
             </tb:TaskbarIcon.ContextMenu>
         </tb:TaskbarIcon>
+    </Window.Resources>
 
-        <!-- Global dark styles for UI elements to prevent standard Windows styles bleed-through -->
-        <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#1E1E1E"/>
-        <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#D4D4D4"/>
-        <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#252526"/>
-        <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#D4D4D4"/>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="232"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-        <!-- Custom Dark ScrollBar Theme Styles -->
-        <Style TargetType="{x:Type RepeatButton}" x:Key="ScrollBarLineButton">
-            <Setter Property="Visibility" Value="Collapsed"/>
-        </Style>
-        <Style TargetType="{x:Type Thumb}" x:Key="ScrollBarPageThumb">
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type Thumb}">
-                        <Border x:Name="ThumbBorder" Background="#4E4E4E" CornerRadius="3" Margin="2,0"/>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ThumbBorder" Property="Background" Value="#6E6E6E"/>
-                            </Trigger>
-                            <Trigger Property="IsDragging" Value="True">
-                                <Setter TargetName="ThumbBorder" Property="Background" Value="#9E9E9E"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style TargetType="{x:Type ScrollBar}">
-            <Setter Property="Background" Value="#1E1E1E"/>
-            <Setter Property="Width" Value="10"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type ScrollBar}">
-                        <Grid x:Name="Bg" Background="#1E1E1E" SnapsToDevicePixels="true">
-                            <Track x:Name="PART_Track" IsDirectionReversed="true" IsEnabled="{TemplateBinding IsEnabled}">
-                                <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollBarLineButton}"/>
-                                </Track.DecreaseRepeatButton>
-                                <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollBarLineButton}"/>
-                                </Track.IncreaseRepeatButton>
-                                <Track.Thumb>
-                                    <Thumb Style="{StaticResource ScrollBarPageThumb}"/>
-                                </Track.Thumb>
-                            </Track>
+        <!-- Persistent Navigation Drawer (exact match to xPrivacyGuard) -->
+        <Border Grid.Column="0" Background="{StaticResource DrawerBg}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="0,0,1,0" Padding="16,20">
+            <DockPanel LastChildFill="True">
+                <!-- Brand Header + Live Status Card -->
+                <StackPanel DockPanel.Dock="Top">
+                    <StackPanel Orientation="Horizontal" Margin="4,0,4,14" VerticalAlignment="Center">
+                        <Border Width="40" Height="40" CornerRadius="12"
+                                Background="{StaticResource Surface}" BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                                Padding="5" Margin="0,0,12,0">
+                            <Image Source="pack://application:,,,/xBackup;component/icon.ico" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="xBackup" FontSize="17" FontWeight="Bold" Foreground="{StaticResource AppText}"/>
+                            <TextBlock Text="R E F S   B A C K U P" Foreground="{StaticResource Accent}" FontSize="9.5" FontWeight="SemiBold" Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Live Engine Status Pill -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="10" Padding="12,8" Margin="2,0,2,14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Ellipse x:Name="StatusDot" Grid.Column="0" Width="8" Height="8" Fill="{StaticResource Success}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="TxtStatus" Grid.Column="1" Text="Ready" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="ReFS" Grid.Column="2" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                         </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+                    </Border>
 
-        <!-- Custom ControlTemplate to force the popup menu list container background completely dark -->
-        <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#1E1E1E"/>
-            <Setter Property="Foreground" Value="#D4D4D4"/>
-            <Setter Property="BorderBrush" Value="#3E3E42"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="6,4"/>
-            <Setter Property="HorizontalContentAlignment" Value="Left"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBox">
-                        <Grid x:Name="MainGrid" SnapsToDevicePixels="True">
+                    <Border Height="1" Background="{StaticResource PanelBorder}" Margin="2,0,2,14"/>
+                </StackPanel>
+
+                <!-- Bottom VHDX Mount Status Card -->
+                <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="10" Padding="12,9" Margin="2,14,2,0">
+                    <StackPanel>
+                        <TextBlock x:Name="DrawerHomeMountText" Text="Home-PC: Unmounted" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource MutedText}" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="DrawerXServerMountText" Text="xServer: Unmounted" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource MutedText}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="Administrator • Verified Dismount" FontSize="9.5" Foreground="{StaticResource Accent}" Margin="0,5,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Navigation Items -->
+                <StackPanel>
+                    <RadioButton x:Name="NavDashboard" Style="{StaticResource NavButtonStyle}" IsChecked="True" Checked="Nav_Checked" Tag="Dashboard">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Data="M3,13 H11 V3 H3 V13 Z M3,21 H11 V15 H3 V21 Z M13,21 H21 V11 H13 V21 Z M13,3 V9 H21 V3 H13 Z"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"
+                                  Width="15" Height="15" Stretch="Uniform" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Dashboard" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton x:Name="NavHomePc" Style="{StaticResource NavButtonStyle}" Checked="Nav_Checked" Tag="HomePc">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Data="M20,18 C21.1,18 22,17.1 22,16 V6 C22,4.9 21.1,4 20,4 H4 C2.9,4 2,4.9 2,6 V16 C2,17.1 2.9,18 4,18 H0 V20 H24 V18 H20 Z M4,6 H20 V16 H4 V6 Z"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"
+                                  Width="16" Height="16" Stretch="Uniform" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Home-PC" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton x:Name="NavXServer" Style="{StaticResource NavButtonStyle}" Checked="Nav_Checked" Tag="XServer">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Data="M2,4 H22 V10 H2 V4 Z M4,6 V8 H6 V6 H4 Z M2,14 H22 V20 H2 V14 Z M4,16 V18 H6 V16 H4 Z"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"
+                                  Width="16" Height="16" Stretch="Uniform" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="xServer Clone" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton x:Name="NavLogs" Style="{StaticResource NavButtonStyle}" Checked="Nav_Checked" Tag="Logs">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Data="M4,6 H20 V8 H4 V6 Z M4,11 H20 V13 H4 V11 Z M4,16 H14 V18 H4 V16 Z"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"
+                                  Width="16" Height="16" Stretch="Uniform" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Activity &amp; Logs" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton x:Name="NavSettings" Style="{StaticResource NavButtonStyle}" Checked="Nav_Checked" Tag="Settings">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Data="M19.14,12.94 C19.18,12.64 19.2,12.33 19.2,12 C19.2,11.68 19.18,11.36 19.13,11.06 L21.16,9.48 C21.34,9.34 21.39,9.07 21.28,8.87 L19.36,5.55 C19.24,5.33 18.99,5.26 18.77,5.33 L16.38,6.29 C15.88,5.91 15.35,5.59 14.76,5.35 L14.4,2.81 C14.36,2.57 14.16,2.4 13.92,2.4 L10.08,2.4 C9.84,2.4 9.65,2.57 9.61,2.81 L9.25,5.35 C8.66,5.59 8.12,5.92 7.63,6.29 L5.24,5.33 C5.02,5.25 4.77,5.33 4.65,5.55 L2.74,8.87 C2.62,9.08 2.66,9.34 2.86,9.48 L4.89,11.06 C4.84,11.36 4.8,11.69 4.8,12 C4.8,12.31 4.82,12.64 4.87,12.94 L2.84,14.52 C2.66,14.66 2.61,14.93 2.72,15.13 L4.64,18.45 C4.76,18.67 5.01,18.74 5.23,18.67 L7.62,17.71 C8.12,18.09 8.65,18.41 9.24,18.65 L9.6,21.19 C9.65,21.43 9.84,21.6 10.08,21.6 L13.92,21.6 C14.16,21.6 14.36,21.43 14.39,21.19 L14.75,18.65 C15.34,18.41 15.88,18.09 16.37,17.71 L18.76,18.67 C18.98,18.75 19.23,18.67 19.35,18.45 L21.27,15.13 C21.39,14.91 21.34,14.66 21.15,14.52 L19.14,12.94 Z M12,15.6 C10.02,15.6 8.4,13.98 8.4,12 C8.4,10.02 10.02,8.4 12,8.4 C13.98,8.4 15.6,10.02 15.6,12 C15.6,13.98 13.98,15.6 12,15.6 Z"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"
+                                  Width="16" Height="16" Stretch="Uniform" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Schedule &amp; Settings" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Main Content Area -->
+        <Grid Grid.Column="1" Margin="24,18,24,16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Top Page Header -->
+            <Grid Grid.Row="0" Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock x:Name="PageTitleText" Text="Dashboard" FontSize="20" FontWeight="Bold"/>
+                    <TextBlock x:Name="PageSubtitleText" Text="Automated incremental ReFS backups for Home-PC and xServer" Foreground="{StaticResource MutedText}" FontSize="12" Margin="0,3,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="BtnStop" Content="Stop Active Job" Style="{StaticResource DangerButtonStyle}" Click="BtnStop_Click" IsEnabled="False" Margin="0,0,8,0"/>
+                    <Button x:Name="BtnRunAll" Content="Run All Backups" Style="{StaticResource SolidAccentButtonStyle}" Click="BtnRunAll_Click"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- TAB 1: DASHBOARD -->
+            <ScrollViewer x:Name="DashboardView" Grid.Row="1" Visibility="Visible" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <!-- Dual Target Bento Cards -->
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Home-PC Card -->
+                        <Border Grid.Column="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="HOME-PC SNAPSHOT" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}"/>
+                                        <TextBlock Text="Local ReFS Incremental" FontSize="15" FontWeight="SemiBold" Margin="0,3,0,0"/>
+                                    </StackPanel>
+                                    <Border x:Name="BadgeHomeMount" Grid.Column="1" Background="{StaticResource SurfaceRaised}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="999" Padding="10,4" VerticalAlignment="Top">
+                                        <TextBlock x:Name="TxtHomeMountBadge" Text="Unmounted" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource MutedText}"/>
+                                    </Border>
+                                </Grid>
+                                <TextBlock x:Name="TxtDashHomePath" Text="Not configured" FontSize="11.5" Foreground="{StaticResource MutedText}" TextTrimming="CharacterEllipsis" Margin="0,0,0,12"/>
+                                <WrapPanel>
+                                    <Button x:Name="BtnBackup" Content="Backup Home-PC" Style="{StaticResource AccentButtonStyle}" Click="BtnBackup_Click" Margin="0,0,8,6"/>
+                                    <Button x:Name="BtnToggleMount" Content="Mount Drive" Click="BtnToggleMount_Click" Margin="0,0,8,6"/>
+                                    <Button x:Name="BtnRestore" Content="Restore..." Click="BtnRestore_Click" Margin="0,0,0,6"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- xServer Clone Card -->
+                        <Border Grid.Column="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="XSERVER INCREMENTAL CLONE" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}"/>
+                                        <TextBlock x:Name="TxtDashXServerTitle" Text="Not configured" FontSize="15" FontWeight="SemiBold" Margin="0,3,0,0"/>
+                                    </StackPanel>
+                                    <Border x:Name="BadgeXServerMount" Grid.Column="1" Background="{StaticResource SurfaceRaised}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="999" Padding="10,4" VerticalAlignment="Top">
+                                        <TextBlock x:Name="TxtXServerMountBadge" Text="Unmounted" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource MutedText}"/>
+                                    </Border>
+                                </Grid>
+                                <TextBlock x:Name="TxtDashXServerStatus" Text="Last clone: Never run" FontSize="11.5" Foreground="{StaticResource MutedText}" TextTrimming="CharacterEllipsis" Margin="0,0,0,12"/>
+                                <WrapPanel>
+                                    <Button x:Name="BtnDashRunXServer" Content="Clone xServer" Style="{StaticResource AccentButtonStyle}" Click="BtnRunXServer_Click" Margin="0,0,8,6"/>
+                                    <Button x:Name="BtnDashMountXServer" Content="Mount Drive" Click="BtnToggleXServerMount_Click" Margin="0,0,8,6"/>
+                                    <Button x:Name="BtnDashTestXServer" Content="Test SSH" Click="BtnTestXServer_Click" Margin="0,0,0,6"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- Telemetry Bento Metrics Row -->
+                    <UniformGrid Columns="5" Margin="0,0,0,14">
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="14" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="SCANNED" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                                <TextBlock x:Name="LblScanned" Text="0" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AppText}" Margin="0,6,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="14" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="BACKED UP" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                                <TextBlock x:Name="LblBackedUp" Text="0" FontSize="18" FontWeight="Bold" Foreground="{StaticResource Success}" Margin="0,6,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="14" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="UP-TO-DATE" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                                <TextBlock x:Name="LblUpToDate" Text="0" FontSize="18" FontWeight="Bold" Foreground="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="14" Margin="0,0,10,0">
+                            <StackPanel>
+                                <TextBlock Text="SKIPPED / ERR" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                                <TextBlock x:Name="LblLocked" Text="0" FontSize="18" FontWeight="Bold" Foreground="{StaticResource Warn}" Margin="0,6,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="14">
+                            <StackPanel>
+                                <TextBlock Text="TRANSFERRED" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                                <TextBlock x:Name="LblSavings" Text="0.00 B" FontSize="16" FontWeight="Bold" Foreground="{StaticResource AccentBright}" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
+                    <!-- Daily Schedule Summary Banner -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="14,12">
+                        <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <Popup x:Name="PART_Popup" AllowsTransparency="True" Grid.ColumnSpan="2" Placement="Bottom" IsOpen="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="{DynamicResource {x:Static SystemParameters.ComboBoxPopupAnimationKey}}">
-                                <Border x:Name="DropDownBorder" Background="#1E1E1E" BorderBrush="#3E3E42" BorderThickness="1" MaxHeight="{TemplateBinding MaxDropDownHeight}" MinWidth="{Binding ActualWidth, ElementName=MainGrid}">
-                                    <ScrollViewer x:Name="DropDownScrollViewer" CanContentScroll="True">
-                                        <Grid x:Name="Grid" RenderOptions.ClearTypeHint="Enabled">
-                                            <Canvas x:Name="Canvas" HorizontalAlignment="Left" Height="0" VerticalAlignment="Top" Width="0">
-                                                <Rectangle x:Name="OpaqueRect" Fill="#1E1E1E" Height="{Binding ActualHeight, ElementName=DropDownBorder}" Width="{Binding ActualWidth, ElementName=DropDownBorder}"/>
-                                            </Canvas>
-                                            <ItemsPresenter x:Name="ItemsPresenter" KeyboardNavigation.DirectionalNavigation="Contained" SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
-                                        </Grid>
-                                    </ScrollViewer>
-                                </Border>
-                            </Popup>
-                            <ToggleButton BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Background="{TemplateBinding Background}" Grid.ColumnSpan="2" IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press">
-                                <ToggleButton.Template>
-                                    <ControlTemplate TargetType="ToggleButton">
-                                        <Border x:Name="Border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
-                                            <Grid Background="Transparent">
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="DAILY SCHEDULED TASK (12:00 AM)" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource Accent}"/>
+                                <TextBlock x:Name="TxtDashScheduleInfo" Text="Checking Windows Task Scheduler..." FontSize="12" Foreground="{StaticResource MutedText}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Open Logs" Click="BtnOpenLogsFolder_Click" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- TAB 2: HOME-PC BACKUP -->
+            <ScrollViewer x:Name="HomePcView" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <!-- Scopes Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Backup Scopes (System Drives)" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Drives included in your Home-PC incremental ReFS snapshots" FontSize="11.5" Foreground="{StaticResource MutedText}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Button x:Name="BtnConfigureExclusions" Grid.Column="1" Content="Configure Scopes &amp; Exclusions" Style="{StaticResource AccentButtonStyle}" Click="BtnConfigureExclusions_Click"/>
+                            </Grid>
+
+                            <ItemsControl x:Name="ItemsScopes" MaxHeight="110">
+                                <ItemsControl.Template>
+                                    <ControlTemplate TargetType="ItemsControl">
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                            <ItemsPresenter/>
+                                        </ScrollViewer>
+                                    </ControlTemplate>
+                                </ItemsControl.Template>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#121214" CornerRadius="8" Padding="12,8" Margin="0,0,0,6" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1">
+                                            <Grid>
                                                 <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
                                                     <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto" MinWidth="20"/>
                                                 </Grid.ColumnDefinitions>
-                                                <Path x:Name="Arrow" Grid.Column="1" Data="M0,0 L4,4 L8,0 Z" Fill="#858585" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                <Ellipse x:Name="DriveDot" Grid.Column="0" Width="8" Height="8" Fill="{StaticResource Accent}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding DisplayText}" FontSize="12.5" FontWeight="SemiBold" Foreground="{StaticResource AppText}" VerticalAlignment="Center"/>
                                             </Grid>
                                         </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="Border" Property="Background" Value="#2D2D30"/>
-                                                <Setter TargetName="Arrow" Property="Fill" Value="#D4D4D4"/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </ToggleButton.Template>
-                            </ToggleButton>
-                            <ContentPresenter IsHitTestVisible="False" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" Content="{TemplateBinding SelectionBoxItem}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" Margin="{TemplateBinding Padding}" SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding IsDrive}" Value="False">
+                                                <Setter TargetName="DriveDot" Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
 
-    <Grid Margin="20">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>   <!-- Header & App Title -->
-            <RowDefinition Height="Auto"/>   <!-- Configuration Section -->
-            <RowDefinition Height="Auto"/>   <!-- Control Actions Panel -->
-            <RowDefinition Height="Auto"/>   <!-- Progress and Metrics Dashboard -->
-            <RowDefinition Height="*"/>      <!-- Real-time Activity Log -->
-        </Grid.RowDefinitions>
+                    <!-- Storage Container Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="ReFS Storage Container (Home-PC)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <TextBlock Text="Destination Folder Root Path" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="TxtDestRoot" Text=""/>
+                                <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="38" Margin="8,0,0,0" Click="BtnBrowseDest_Click"/>
+                            </Grid>
 
-        <!-- Header Panel -->
-        <Border Grid.Row="0" Background="#252526" CornerRadius="6" Padding="15" Margin="0,0,0,15" BorderBrush="#3E3E42" BorderThickness="1">
-            <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="24"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="Mount Drive Letter" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="CboDriveLetter" HorizontalAlignment="Left" Width="80">
+                                        <ComboBoxItem Content="Z"/>
+                                        <ComboBoxItem Content="Y"/>
+                                        <ComboBoxItem Content="X" IsSelected="True"/>
+                                        <ComboBoxItem Content="W"/>
+                                        <ComboBoxItem Content="V"/>
+                                        <ComboBoxItem Content="U"/>
+                                        <ComboBoxItem Content="T"/>
+                                        <ComboBoxItem Content="S"/>
+                                        <ComboBoxItem Content="R"/>
+                                        <ComboBoxItem Content="Q"/>
+                                        <ComboBoxItem Content="P"/>
+                                        <ComboBoxItem Content="O"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Dynamic VHDX Capacity (GB)" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox x:Name="TxtContainerSizeGb" Text="200" Width="80" HorizontalContentAlignment="Center" MaxLength="6"/>
+                                        <TextBlock Text="GB" Foreground="{StaticResource MutedText}" VerticalAlignment="Center" Margin="8,0,12,0" FontSize="12"/>
+                                        <Button x:Name="BtnResizeVhdx" Content="Grow Container" Click="BtnResizeVhdx_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Maintenance Actions Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="Home-PC Operations" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <WrapPanel>
+                                <Button Content="Execute Incremental Backup" Style="{StaticResource SolidAccentButtonStyle}" Click="BtnBackup_Click" Margin="0,0,10,6"/>
+                                <Button x:Name="BtnVerify" Content="Verify Integrity (SHA-256)" Click="BtnVerify_Click" Margin="0,0,10,6"/>
+                                <Button Content="Restore Files..." Click="BtnRestore_Click" Margin="0,0,10,6"/>
+                                <Button x:Name="BtnHomeMountAlt" Content="Mount / Eject Drive" Click="BtnToggleMount_Click" Margin="0,0,0,6"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- TAB 3: XSERVER INCREMENTAL CLONE -->
+            <ScrollViewer x:Name="XServerView" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <!-- SSH Target Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="xServer SSH Connection &amp; Clone Policy" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Pulls only new or modified files over SSH into a clean ReFS mirror container." FontSize="11.5" Foreground="{StaticResource MutedText}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Button x:Name="BtnTestXServer" Grid.Column="1" Content="Test SSH Connection" Style="{StaticResource AccentButtonStyle}" Click="BtnTestXServer_Click"/>
+                            </Grid>
+
+                            <Grid Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="1.5*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="90"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="xServer Host / IP" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtXServerHost" Text=""/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="SSH Username" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtXServerUser" Text=""/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="Port" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtXServerPort" Text="22" HorizontalContentAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <WrapPanel>
+                                <CheckBox x:Name="ChkXServerEnabled" Content="Include xServer in daily midnight scheduled backup" IsChecked="True" Margin="0,0,22,6"/>
+                                <CheckBox x:Name="ChkXServerMirror" Content="Mirror deletions (keep clean exact clone)" IsChecked="True" Margin="0,0,0,6"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ReFS Container Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="xServer ReFS Storage Container" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                            <TextBlock Text="Destination Folder Root Path (stores xServerBackup.vhdx)" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                            <Grid Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="TxtXServerDestRoot" Text=""/>
+                                <Button x:Name="BtnBrowseXServerDest" Grid.Column="1" Content="..." Width="38" Margin="8,0,0,0" Click="BtnBrowseXServerDest_Click"/>
+                            </Grid>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="24"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="Mount Drive Letter" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="CboXServerDriveLetter" HorizontalAlignment="Left" Width="80">
+                                        <ComboBoxItem Content="Z"/>
+                                        <ComboBoxItem Content="Y" IsSelected="True"/>
+                                        <ComboBoxItem Content="X"/>
+                                        <ComboBoxItem Content="W"/>
+                                        <ComboBoxItem Content="V"/>
+                                        <ComboBoxItem Content="U"/>
+                                        <ComboBoxItem Content="T"/>
+                                        <ComboBoxItem Content="S"/>
+                                        <ComboBoxItem Content="R"/>
+                                        <ComboBoxItem Content="Q"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Dynamic VHDX Capacity (GB)" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox x:Name="TxtXServerContainerSizeGb" Text="100" Width="80" HorizontalContentAlignment="Center" MaxLength="6"/>
+                                        <TextBlock Text="GB" Foreground="{StaticResource MutedText}" VerticalAlignment="Center" Margin="8,0,12,0" FontSize="12"/>
+                                        <Button x:Name="BtnResizeXServerVhdx" Content="Grow Container" Click="BtnResizeXServerVhdx_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Remote Paths & Actions Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="Included Linux Paths (one per line)" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtXServerIncludes" AcceptsReturn="True" Height="82" VerticalContentAlignment="Top" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11.5" Margin="0,0,0,10"/>
+
+                            <TextBlock Text="Excluded Patterns / Paths (one per line)" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtXServerExcludes" AcceptsReturn="True" Height="82" VerticalContentAlignment="Top" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11.5" Margin="0,0,0,12"/>
+
+                            <WrapPanel>
+                                <Button x:Name="BtnRunXServer" Content="Run xServer Clone Now" Style="{StaticResource SolidAccentButtonStyle}" Click="BtnRunXServer_Click" Margin="0,0,10,6"/>
+                                <Button x:Name="BtnToggleXServerMount" Content="Mount xServer Drive" Click="BtnToggleXServerMount_Click" Margin="0,0,10,6"/>
+                                <Button x:Name="BtnSaveXServerSettings" Content="Save xServer Settings" Style="{StaticResource AccentButtonStyle}" Click="BtnSaveXServerSettings_Click" Margin="0,0,0,6"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- TAB 4: ACTIVITY & LOGS -->
+            <Border x:Name="LogsView" Grid.Row="1" Visibility="Collapsed" Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="14">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="PERSONAL BACKUP ENGINE" FontSize="20" FontWeight="Bold" Foreground="#007ACC"/>
-                        <TextBlock Text="Secure, Incremental, Compressed backups for personal user space" FontSize="12" Foreground="#858585" Margin="0,2,0,0"/>
-                    </StackPanel>
-                    <Border Grid.Column="1" Background="#3E3E42" CornerRadius="4" Padding="10,5">
-                        <TextBlock x:Name="TxtStatus" Text="Engine Status: Ready" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#4EC9B0"/>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="LIVE OPERATIONS FEED" FontSize="10.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                            <TextBlock x:Name="TxtLogFilePath" Text="Persistent disk logging enabled" FontSize="10.5" Foreground="{StaticResource SubtleText}" Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Button Content="Open Log Folder" Click="BtnOpenLogsFolder_Click" Padding="10,5" FontSize="11.5" Margin="0,0,8,0"/>
+                            <Button Content="Clear Feed" Click="BtnClearLog_Click" Padding="10,5" FontSize="11.5"/>
+                        </StackPanel>
+                    </Grid>
+                    <Border Grid.Row="1" Background="#121214" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="8">
+                        <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto" Padding="10">
+                            <RichTextBox x:Name="RtbLog" IsReadOnly="True" Background="Transparent" BorderThickness="0" Foreground="{StaticResource AppText}" FontFamily="Consolas" FontSize="11.5" Margin="0">
+                                <FlowDocument PagePadding="0"/>
+                            </RichTextBox>
+                        </ScrollViewer>
                     </Border>
                 </Grid>
-                <ProgressBar x:Name="PrgWaiting" IsIndeterminate="True" Height="4" Margin="0,10,0,-5" Background="#1E1E1E" Visibility="Collapsed"/>
-            </StackPanel>
-        </Border>
-
-        <!-- Configuration Grid -->
-        <Grid Grid.Row="1" Margin="0,0,0,15">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="1*"/>
-                <ColumnDefinition Width="1*"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- Sources Panel -->
-            <Border Grid.Column="0" Background="#252526" CornerRadius="6" Padding="15" Margin="0,0,10,0" BorderBrush="#3E3E42" BorderThickness="1">
-                <StackPanel>
-                    <TextBlock Text="Backup Scopes (System Drives)" FontSize="14" FontWeight="Bold" Foreground="#D4D4D4" Margin="0,0,0,10"/>
-
-                    <ItemsControl x:Name="ItemsScopes" MaxHeight="86">
-                        <ItemsControl.Template>
-                            <ControlTemplate TargetType="ItemsControl">
-                                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <ItemsPresenter/>
-                                </ScrollViewer>
-                            </ControlTemplate>
-                        </ItemsControl.Template>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#1E1E1E" CornerRadius="4" Padding="10,8" Margin="0,0,0,6" BorderBrush="#3E3E42" BorderThickness="1">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-
-                                        <!-- Sleek Hardware Drive Bay Icon -->
-                                        <Grid x:Name="DriveIcon" Grid.Column="0" Width="20" Height="13" Margin="0,0,10,0" VerticalAlignment="Center">
-                                            <Border BorderBrush="#007ACC" BorderThickness="1.5" CornerRadius="2" Background="#2D2D30">
-                                                <Grid>
-                                                    <Rectangle Width="5" Height="1.2" Fill="#858585" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="3,0,0,0"/>
-                                                    <Ellipse Width="2.5" Height="2.5" Fill="#4EC9B0" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,3,0"/>
-                                                </Grid>
-                                            </Border>
-                                        </Grid>
-
-                                        <TextBlock Grid.Column="1" Text="{Binding DisplayText}" FontSize="13" Foreground="#D4D4D4" VerticalAlignment="Center" FontWeight="SemiBold"/>
-                                    </Grid>
-                                </Border>
-                                <DataTemplate.Triggers>
-                                    <DataTrigger Binding="{Binding IsDrive}" Value="False">
-                                        <Setter TargetName="DriveIcon" Property="Visibility" Value="Collapsed"/>
-                                    </DataTrigger>
-                                </DataTemplate.Triggers>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <Button x:Name="BtnConfigureExclusions" Content="Configure Scopes" Height="34" Margin="0,12,0,0" Background="#3E3E42" Click="BtnConfigureExclusions_Click"/>
-                </StackPanel>
             </Border>
 
-            <!-- Destination Configuration Panel -->
-            <Border Grid.Column="1" Background="#252526" CornerRadius="6" Padding="15" BorderBrush="#3E3E42" BorderThickness="1">
+            <!-- TAB 5: SCHEDULE & SETTINGS -->
+            <ScrollViewer x:Name="SettingsView" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
-                    <TextBlock Text="Storage Container Target &amp; Allocation" FontSize="14" FontWeight="Bold" Foreground="#D4D4D4" Margin="0,0,0,10"/>
+                    <!-- Scheduled Task Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="Daily Midnight Wake Task" FontSize="14" FontWeight="SemiBold"/>
+                            <TextBlock Text="Wakes the PC at 12:00 AM daily, keeps Windows awake for the full Home-PC + xServer run, and verifies all ReFS containers are dismounted before exiting." FontSize="11.5" Foreground="{StaticResource MutedText}" Margin="0,3,0,12" TextWrapping="Wrap"/>
 
-                    <TextBlock Text="Backup Destination Folder Root Path:" FontSize="11" Foreground="#858585" Margin="0,0,0,4"/>
-                    <Grid Margin="0,0,0,10">
+                            <Border Background="#121214" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,12">
+                                <TextBlock x:Name="TxtSchedulerSummary" Text="Checking task status..." FontFamily="Consolas" FontSize="11.5" Foreground="{StaticResource AccentBright}" TextWrapping="Wrap"/>
+                            </Border>
+
+                            <WrapPanel>
+                                <Button x:Name="BtnScheduleTask" Content="Register Midnight Wake Task" Style="{StaticResource SolidAccentButtonStyle}" Click="BtnScheduleTask_Click" Margin="0,0,10,6"/>
+                                <Button Content="Re-register / Update Task (6h Limit)" Style="{StaticResource AccentButtonStyle}" Click="BtnUpdateTask_Click" Margin="0,0,10,6"/>
+                                <Button Content="Refresh Status" Click="BtnRefreshTask_Click" Margin="0,0,0,6"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Reliability & Integrity Card -->
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="Integrity &amp; Dismount Safety" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <CheckBox x:Name="ChkWeeklyIntegrity" Content="Run automated weekly SHA-256 integrity verification during midnight silent task (slower)" Margin="0,0,0,6" Checked="ChkWeeklyIntegrity_Changed" Unchecked="ChkWeeklyIntegrity_Changed"/>
+                            <TextBlock Text="Recommended: Leave unchecked so daily midnight runs finish in minutes. You can run SHA-256 verification manually anytime from the Home-PC tab." FontSize="11" Foreground="{StaticResource MutedText}" TextWrapping="Wrap" Margin="25,0,0,14"/>
+
+                            <WrapPanel>
+                                <Button x:Name="BtnVerifyDismountAll" Content="Force Dismount &amp; Verify All VHDX Containers" Style="{StaticResource AccentButtonStyle}" Click="BtnVerifyDismountAll_Click" Margin="0,0,10,6"/>
+                                <Button Content="Open Persistent Log Folder" Click="BtnOpenLogsFolder_Click" Margin="0,0,0,6"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Persistent Bottom Progress Strip -->
+            <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,14,0,0">
+                <StackPanel>
+                    <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="TxtDestRoot" Text="F:\Backup\Home-PC" Background="#1E1E1E" Foreground="#D4D4D4" BorderBrush="#3E3E42" Padding="6" VerticalAlignment="Center"/>
-                        <Button x:Name="BtnBrowseDest" Grid.Column="1" Content="..." Width="32" Height="30" Padding="0" Margin="5,0,0,0" Background="#3E3E42" Click="BtnBrowseDest_Click" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtProgressDetails" Grid.Column="0" Text="Ready" FontSize="12" Foreground="{StaticResource MutedText}" TextTrimming="CharacterEllipsis" Cursor="Hand" MouseLeftButtonDown="TxtProgressDetails_MouseLeftButtonDown"/>
+                        <ProgressBar x:Name="PrgWaiting" Grid.Column="1" IsIndeterminate="True" Width="90" Height="4" VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed"/>
                     </Grid>
-
-                    <Grid Margin="0,0,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                            <TextBlock Text="Mount Target Drive Letter:" FontSize="11" Foreground="#858585" Margin="0,0,0,4"/>
-                            <ComboBox x:Name="CboDriveLetter" HorizontalAlignment="Left" Width="70" Height="28">
-                                <ComboBox.Resources>
-                                    <Style TargetType="ComboBoxItem">
-                                        <Setter Property="Background" Value="#1E1E1E"/>
-                                        <Setter Property="Foreground" Value="#D4D4D4"/>
-                                        <Setter Property="BorderThickness" Value="0"/>
-                                        <Style.Triggers>
-                                            <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter Property="Background" Value="#3E3E42"/>
-                                                <Setter Property="Foreground" Value="White"/>
-                                            </Trigger>
-                                            <Trigger Property="IsSelected" Value="True">
-                                                <Setter Property="Background" Value="#007ACC"/>
-                                                <Setter Property="Foreground" Value="White"/>
-                                            </Trigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ComboBox.Resources>
-                                <ComboBoxItem Content="Z" IsSelected="True" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="Y" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="X" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="W" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="V" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="U" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="T" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="S" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="R" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="Q" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="P" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                                <ComboBoxItem Content="O" Background="#1E1E1E" Foreground="#D4D4D4"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="VHDX Container Capacity (GB):" FontSize="11" Foreground="#858585" Margin="0,0,0,4"/>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBox x:Name="TxtContainerSizeGb" Text="100" Width="60" Height="28" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" Background="#1E1E1E" Foreground="#D4D4D4" BorderBrush="#3E3E42" Padding="2" MaxLength="6" ToolTip="Virtual maximum capacity for creation or expansion. The container is dynamic and only consumes physical disk space as data is written."/>
-                                <TextBlock Text="GB" Foreground="#858585" VerticalAlignment="Center" Margin="6,0,10,0" FontSize="12"/>
-                                <Button x:Name="BtnResizeVhdx" Content="Grow Container" Height="28" Padding="12,0" Background="#3E3E42" Foreground="#D4D4D4" Click="BtnResizeVhdx_Click" ToolTip="Expand the existing VHDX to the specified GB. The container remains dynamic (space used only as needed) and existing backups are fully preserved."/>
-                            </StackPanel>
-                        </StackPanel>
-                    </Grid>
+                    <ProgressBar x:Name="PrgBar" Value="0" Maximum="100" Height="6"/>
                 </StackPanel>
             </Border>
         </Grid>
-
-        <!-- Actions Panel -->
-        <Grid Grid.Row="2" Margin="0,0,0,15">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                <Button x:Name="BtnScheduleTask" Content="Register Midnight Wake Task" Width="230" Background="#3E3E42" Click="BtnScheduleTask_Click"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button x:Name="BtnVerify" Content="Verify Integrity" Width="150" Margin="0,0,10,0" Background="#3E3E42" Click="BtnVerify_Click"/>
-                <Button x:Name="BtnRestore" Content="Restore Files" Width="150" Margin="0,0,10,0" Background="#3E3E42" Click="BtnRestore_Click"/>
-                <Button x:Name="BtnToggleMount" Content="Mount Backup Drive" Width="180" Margin="0,0,10,0" Background="#3E3E42" Click="BtnToggleMount_Click"/>
-                <Button x:Name="BtnStop" Content="Stop" Width="80" Margin="0,0,10,0" Background="#B43232" Click="BtnStop_Click" IsEnabled="False"/>
-                <Button x:Name="BtnBackup" Content="Execute Incremental Backup" Width="220" Background="#007ACC" Click="BtnBackup_Click"/>
-            </StackPanel>
-        </Grid>
-
-        <!-- Metrics Dashboard -->
-        <Border Grid.Row="3" Background="#252526" CornerRadius="6" Padding="15" Margin="0,0,0,15" BorderBrush="#3E3E42" BorderThickness="1">
-            <StackPanel>
-                <Grid Margin="0,0,0,10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="1*"/>
-                        <ColumnDefinition Width="1*"/>
-                        <ColumnDefinition Width="1*"/>
-                        <ColumnDefinition Width="1*"/>
-                        <ColumnDefinition Width="1.2*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <StackPanel Grid.Column="0">
-                        <TextBlock Text="Scanned Files" FontSize="11" Foreground="#858585"/>
-                        <TextBlock x:Name="LblScanned" Text="0" FontSize="18" FontWeight="Bold" Foreground="#D4D4D4" Margin="0,4,0,0"/>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="1">
-                        <TextBlock Text="Backed Up" FontSize="11" Foreground="#858585"/>
-                        <TextBlock x:Name="LblBackedUp" Text="0" FontSize="18" FontWeight="Bold" Foreground="#4EC9B0" Margin="0,4,0,0"/>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="2">
-                        <TextBlock Text="Up-To-Date" FontSize="11" Foreground="#858585"/>
-                        <TextBlock x:Name="LblUpToDate" Text="0" FontSize="18" FontWeight="Bold" Foreground="#858585" Margin="0,4,0,0"/>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="3">
-                        <TextBlock Text="Locked / Skipped" FontSize="11" Foreground="#858585"/>
-                        <TextBlock x:Name="LblLocked" Text="0" FontSize="18" FontWeight="Bold" Foreground="#DCDCAA" Margin="0,4,0,0"/>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="4">
-                        <TextBlock Text="Total Bytes Mirrored" FontSize="11" Foreground="#858585"/>
-                        <TextBlock x:Name="LblSavings" Text="0.0 MB" FontSize="14" FontWeight="Bold" Foreground="#9CDCFE" Margin="0,6,0,0"/>
-                    </StackPanel>
-                </Grid>
-
-                <TextBlock x:Name="TxtProgressDetails" Text="Ready to begin scanning..." FontSize="12" Foreground="#D4D4D4" Margin="0,0,0,6" Cursor="Hand" MouseLeftButtonDown="TxtProgressDetails_MouseLeftButtonDown"/>
-                <ProgressBar x:Name="PrgBar" Value="0" Maximum="100" Height="8" Background="#1E1E1E"/>
-            </StackPanel>
-        </Border>
-
-        <!-- Console Log Output -->
-        <Border Grid.Row="4" Background="#1E1E1E" CornerRadius="6" BorderBrush="#3E3E42" BorderThickness="1">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <Border Background="#2D2D2D" Padding="10,6" CornerRadius="5,5,0,0">
-                    <TextBlock Text="Live Operations Feed" FontSize="12" FontWeight="SemiBold" Foreground="#858585"/>
-                </Border>
-                <ScrollViewer Grid.Row="1" x:Name="LogScrollViewer" Background="#111111" VerticalScrollBarVisibility="Auto" Padding="10">
-                    <RichTextBox x:Name="RtbLog" IsReadOnly="True" Background="Transparent" BorderThickness="0" Foreground="#D4D4D4" FontFamily="Consolas" FontSize="12" Margin="0">
-                        <FlowDocument PagePadding="0"/>
-                    </RichTextBox>
-                </ScrollViewer>
-            </Grid>
-        </Border>
     </Grid>
 </Window>

@@ -14,6 +14,12 @@ namespace xBackup
             TxtRetentionDays.Text = GlobalExclusions.RetentionDays.ToString();
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            DwmThemeHelper.ApplyDarkWindowChrome(this);
+        }
+
         private void LoadRootNodes()
         {
             try
