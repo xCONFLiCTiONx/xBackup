@@ -62,3 +62,8 @@ TestResults/
 *.nupkg
 *.snupkg
 *-Setup.exe
+
+# Privacy: local configs, secrets, databases, keys, logs, installers
+settings.json
+*.db
+*.sqlite*
