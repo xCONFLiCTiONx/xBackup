@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -38,8 +39,17 @@ namespace xBackup
         private static readonly Brush MutedBrushColor = (Brush)new BrushConverter().ConvertFromString("#A1A1AA")!;
         private static readonly Brush DefaultTextBrush = (Brush)new BrushConverter().ConvertFromString("#F4F4F5")!;
 
+        public enum IntegrityCheckCycle
+        {
+            Disabled,
+            Daily,
+            Weekly,
+            Monthly,
+            Yearly
+        }
+
         private string _destinationRoot = string.Empty;
-        private bool _enableWeeklyIntegrityInSilent = false;
+        private IntegrityCheckCycle _integrityCheckCycle = IntegrityCheckCycle.Disabled;
         private XServerSettings _xServerSettings = new();
 
         private bool _isProcessing = false;
@@ -92,6 +102,7 @@ namespace xBackup
             public int ContainerSizeGb { get; set; } = 200;
             public string MountDriveLetter { get; set; } = "X";
             public bool EnableWeeklyIntegrityInSilent { get; set; } = false;
+            public string? IntegrityCheckCycle { get; set; }
         }
 
         public ICommand ShowWindowCommand { get; }
@@ -228,8 +239,20 @@ namespace xBackup
                         }
 
                         if (data.ContainerSizeGb > 0) TxtContainerSizeGb.Text = data.ContainerSizeGb.ToString();
-                        _enableWeeklyIntegrityInSilent = data.EnableWeeklyIntegrityInSilent;
-                        ChkWeeklyIntegrity.IsChecked = _enableWeeklyIntegrityInSilent;
+
+                        if (!string.IsNullOrWhiteSpace(data.IntegrityCheckCycle) &&
+                            Enum.TryParse<IntegrityCheckCycle>(data.IntegrityCheckCycle, ignoreCase: true, out var parsedCycle))
+                        {
+                            _integrityCheckCycle = parsedCycle;
+                        }
+                        else
+                        {
+                            _integrityCheckCycle = data.EnableWeeklyIntegrityInSilent
+                                ? IntegrityCheckCycle.Weekly
+                                : IntegrityCheckCycle.Disabled;
+                        }
+                        SelectIntegrityCycleComboBox(_integrityCheckCycle);
+                        UpdateIntegrityCycleHint(_integrityCheckCycle);
 
                         SelectComboBoxLetter(CboDriveLetter, data.MountDriveLetter);
 
@@ -265,7 +288,8 @@ namespace xBackup
                     DestinationRoot = TxtDestRoot.Text,
                     ContainerSizeGb = GetConfiguredContainerSizeGb(),
                     MountDriveLetter = GetSelectedDriveLetter(CboDriveLetter, "X"),
-                    EnableWeeklyIntegrityInSilent = _enableWeeklyIntegrityInSilent
+                    EnableWeeklyIntegrityInSilent = _integrityCheckCycle == IntegrityCheckCycle.Weekly,
+                    IntegrityCheckCycle = _integrityCheckCycle.ToString()
                 };
                 File.WriteAllText(GetConfigFilePath(), JsonSerializer.Serialize(data));
             }
@@ -1062,11 +1086,43 @@ namespace xBackup
 
         private void BtnRefreshTask_Click(object sender, RoutedEventArgs e) => Task.Run(RefreshTaskSchedulerStatusAsync);
 
-        private void ChkWeeklyIntegrity_Changed(object sender, RoutedEventArgs e)
+        private void SelectIntegrityCycleComboBox(IntegrityCheckCycle cycle)
+        {
+            string targetTag = cycle.ToString();
+            foreach (ComboBoxItem item in CboIntegrityCycle.Items)
+            {
+                if (string.Equals(item.Tag?.ToString(), targetTag, StringComparison.OrdinalIgnoreCase))
+                {
+                    item.IsSelected = true;
+                    break;
+                }
+            }
+        }
+
+        private void UpdateIntegrityCycleHint(IntegrityCheckCycle cycle)
+        {
+            if (TxtIntegrityCycleHint == null) return;
+            TxtIntegrityCycleHint.Text = cycle switch
+            {
+                IntegrityCheckCycle.Daily => "Daily: Runs full SHA-256 verification during every midnight silent backup (once per day; slowest).",
+                IntegrityCheckCycle.Weekly => "Weekly: Runs full SHA-256 verification during the midnight silent backup once every 7 days.",
+                IntegrityCheckCycle.Monthly => "Monthly: Runs full SHA-256 verification during the midnight silent backup once per month.",
+                IntegrityCheckCycle.Yearly => "Yearly: Runs full SHA-256 verification during the midnight silent backup once per year.",
+                _ => "Disabled: Midnight runs finish in minutes. You can run SHA-256 verification manually anytime from the Home-PC tab."
+            };
+        }
+
+        private void CboIntegrityCycle_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_isInitializing) return;
-            _enableWeeklyIntegrityInSilent = ChkWeeklyIntegrity.IsChecked == true;
-            SaveWindowPlacementSettings();
+            if (CboIntegrityCycle.SelectedItem is ComboBoxItem item &&
+                item.Tag is string tag &&
+                Enum.TryParse<IntegrityCheckCycle>(tag, ignoreCase: true, out var selectedCycle))
+            {
+                _integrityCheckCycle = selectedCycle;
+                UpdateIntegrityCycleHint(_integrityCheckCycle);
+                SaveWindowPlacementSettings();
+            }
         }
 
         private async void BtnVerifyDismountAll_Click(object sender, RoutedEventArgs e)
@@ -1520,9 +1576,9 @@ namespace xBackup
                     catalog.UpdateSnapshotStatus(snapshot.Id, SnapshotStatus.Complete);
                     AppendLog($"Home-PC backup finished: {backedUpCount:N0} copied, {upToDateCount:N0} up-to-date, {purgedFilesCount:N0} deleted.", SuccessBrushColor);
 
-                    if (_isSilentMode && _enableWeeklyIntegrityInSilent)
+                    if (_isSilentMode && _integrityCheckCycle != IntegrityCheckCycle.Disabled)
                     {
-                        CheckAndRunWeeklyIntegrity(catalog, mountedDrive, cancellationToken);
+                        CheckAndRunScheduledIntegrity(catalog, mountedDrive, _integrityCheckCycle, cancellationToken);
                     }
                 }
             }
@@ -1677,6 +1733,7 @@ namespace xBackup
 
                     using var catalog = new BackupCatalog(dbPath);
                     int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive, _cts.Token);
+                    catalog.SetMetadata("LastIntegrityCheckUtc", DateTime.UtcNow.ToString("O"));
                     AppendLog(corruptCount == 0
                         ? "Integrity Check Complete: 0 corrupted files detected."
                         : $"Integrity Check Complete: {corruptCount} corrupted files marked for re-sync.",
@@ -1706,25 +1763,51 @@ namespace xBackup
             }
         }
 
-        private void CheckAndRunWeeklyIntegrity(BackupCatalog catalog, string mountedDrive, CancellationToken cancellationToken)
+        private static bool IsIntegrityCheckDue(IntegrityCheckCycle cycle, DateTime lastCheckUtc, DateTime nowUtc)
+        {
+            if (cycle == IntegrityCheckCycle.Disabled) return false;
+            if (lastCheckUtc == DateTime.MinValue) return true;
+
+            DateTime lastLocalDate = lastCheckUtc.ToLocalTime().Date;
+            DateTime nowLocalDate = nowUtc.ToLocalTime().Date;
+
+            return cycle switch
+            {
+                IntegrityCheckCycle.Daily => nowLocalDate >= lastLocalDate.AddDays(1),
+                IntegrityCheckCycle.Weekly => nowLocalDate >= lastLocalDate.AddDays(7),
+                IntegrityCheckCycle.Monthly => nowLocalDate >= lastLocalDate.AddMonths(1),
+                IntegrityCheckCycle.Yearly => nowLocalDate >= lastLocalDate.AddYears(1),
+                _ => false
+            };
+        }
+
+        private void CheckAndRunScheduledIntegrity(BackupCatalog catalog, string mountedDrive, IntegrityCheckCycle cycle, CancellationToken cancellationToken)
         {
             try
             {
                 string? lastCheckStr = catalog.GetMetadata("LastIntegrityCheckUtc");
-                DateTime lastCheck = DateTime.MinValue;
-                if (lastCheckStr != null) DateTime.TryParse(lastCheckStr, out lastCheck);
-
-                if ((DateTime.UtcNow - lastCheck).TotalDays >= 7)
+                DateTime lastCheckUtc = DateTime.MinValue;
+                if (!string.IsNullOrWhiteSpace(lastCheckStr) &&
+                    DateTime.TryParse(lastCheckStr, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsedUtc))
                 {
-                    AppendLog("Automated Weekly Integrity Check started...", AccentBrightBrush);
+                    lastCheckUtc = parsedUtc;
+                }
+
+                if (IsIntegrityCheckDue(cycle, lastCheckUtc, DateTime.UtcNow))
+                {
+                    AppendLog($"Automated {cycle} Integrity Check started...", AccentBrightBrush);
                     int corruptCount = PerformIntegrityCheckInternal(catalog, mountedDrive, cancellationToken);
                     catalog.SetMetadata("LastIntegrityCheckUtc", DateTime.UtcNow.ToString("O"));
-                    AppendLog($"Weekly Integrity Check finished ({corruptCount} issues).", corruptCount == 0 ? SuccessBrushColor : AccentBrightBrush);
+                    AppendLog($"{cycle} Integrity Check finished ({corruptCount} issues).", corruptCount == 0 ? SuccessBrushColor : AccentBrightBrush);
+                }
+                else
+                {
+                    AppLogger.Info("INTEGRITY", $"Skipped {cycle} integrity check (last verified UTC: {lastCheckUtc:O}).");
                 }
             }
             catch (Exception ex)
             {
-                AppendLog($"Weekly integrity check warning: {ex.Message}", AccentBrightBrush);
+                AppendLog($"{cycle} integrity check warning: {ex.Message}", AccentBrightBrush);
             }
         }
 

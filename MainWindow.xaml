@@ -567,9 +567,17 @@
                     <!-- Reliability & Integrity Card -->
                     <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="12" Padding="16">
                         <StackPanel>
-                            <TextBlock Text="Integrity &amp; Dismount Safety" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <CheckBox x:Name="ChkWeeklyIntegrity" Content="Run automated weekly SHA-256 integrity verification during midnight silent task (slower)" Margin="0,0,0,6" Checked="ChkWeeklyIntegrity_Changed" Unchecked="ChkWeeklyIntegrity_Changed"/>
-                            <TextBlock Text="Recommended: Leave unchecked so daily midnight runs finish in minutes. You can run SHA-256 verification manually anytime from the Home-PC tab." FontSize="11" Foreground="{StaticResource MutedText}" TextWrapping="Wrap" Margin="25,0,0,14"/>
+                            <TextBlock Text="Integrity &amp; Dismount Safety" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+                            <TextBlock Text="Automated SHA-256 Integrity Check Cycle (Midnight Silent Task)" FontSize="11" Foreground="{StaticResource MutedText}" Margin="0,0,0,5"/>
+                            <ComboBox x:Name="CboIntegrityCycle" HorizontalAlignment="Left" Width="230" Margin="0,0,0,8" SelectionChanged="CboIntegrityCycle_SelectionChanged">
+                                <ComboBoxItem Tag="Disabled" Content="Disabled (Manual Only)" IsSelected="True"/>
+                                <ComboBoxItem Tag="Daily" Content="Daily"/>
+                                <ComboBoxItem Tag="Weekly" Content="Weekly"/>
+                                <ComboBoxItem Tag="Monthly" Content="Monthly"/>
+                                <ComboBoxItem Tag="Yearly" Content="Yearly"/>
+                            </ComboBox>
+                            <TextBlock x:Name="TxtIntegrityCycleHint" Text="Disabled: Midnight runs finish in minutes. You can run SHA-256 verification manually anytime from the Home-PC tab." FontSize="11" Foreground="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                             <WrapPanel>
                                 <Button x:Name="BtnVerifyDismountAll" Content="Force Dismount &amp; Verify All VHDX Containers" Style="{StaticResource AccentButtonStyle}" Click="BtnVerifyDismountAll_Click" Margin="0,0,10,6"/>
